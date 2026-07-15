@@ -8,6 +8,13 @@
 - Redact USB captures, service logs, device serials, LAN tokens, and home IP
   addresses before committing fixtures or documentation.
 
+## Licensing
+
+- Keep package license metadata aligned with the root [LICENSE](LICENSE).
+- Review every new dependency's license; preserve required third-party notices.
+- Follow [licensing policy](docs/licensing.md) before distributing artifacts or
+  patching upstream dependencies.
+
 ## Architecture constraints
 
 - `focusrited` is sole product policy and API authority. Clients never open or

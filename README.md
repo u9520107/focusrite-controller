@@ -12,6 +12,11 @@ use `fnm use` in `web/`, enable Corepack pnpm, then run checks documented in
 [CONTRIBUTING.md](CONTRIBUTING.md). The committed toolchain, Node, pnpm, and
 dependency lockfiles reproduce the setup on another machine.
 
+## License
+
+Licensed under [MIT](LICENSE). See [licensing policy](docs/licensing.md) for
+third-party dependency and distribution requirements.
+
 ## Goal
 
 A Raspberry Pi 5 connects to a Focusrite interface by USB and runs:

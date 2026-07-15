@@ -14,6 +14,8 @@ hardware control or LAN APIs.
 - Biome provides web formatting/linting. Vitest provides web tests.
 - TypeScript 6.0.3 is pinned; TypeScript 7 is deferred until stable ecosystem
   support is confirmed.
+- Project code is MIT-licensed; third-party license inventory and notices are a
+  Phase 7 packaging requirement.
 
 ## Completed
 
@@ -21,6 +23,7 @@ hardware control or LAN APIs.
 - [x] Pinned Rust, Node, pnpm, and dependency lockfiles.
 - [x] Biome and standalone Vitest smoke-test baseline.
 - [x] Contributor setup and verification instructions.
+- [x] Root MIT license, Rust/web SPDX metadata, and dependency-license policy.
 - [x] Rust format and Clippy checks.
 - [x] Web lint, install-lock, and Vitest checks.
 
