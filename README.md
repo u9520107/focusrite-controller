@@ -2,7 +2,8 @@
 
 Local touchscreen and LAN controller for Focusrite Scarlett hardware mixers.
 
-Project is planning-only. No executable exists yet.
+Planning review is complete. Implementation is paused; no executable exists
+yet. Hardware-control implementation waits for Phase 2 discovery.
 
 ## Goal
 
@@ -29,8 +30,9 @@ testing, but does not represent 16i16 routing or monitor-group coverage.
 
 ## Status
 
-Architecture and delivery plan are documented in [docs/](docs/). Implementation
-starts only after hardware discovery and screen/platform details are confirmed.
+Architecture and delivery plan are documented in [docs/](docs/). Solo/mock
+discovery precedes hardware-control implementation; 16i16-specific claims wait
+for real FCP captures and target-Pi validation.
 
 ## Non-affiliation
 

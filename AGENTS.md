@@ -2,8 +2,10 @@
 
 ## Current phase
 
-Planning only. Do not add application code, package manifests, CI workflows, or
-deployment scripts until an implementation phase is explicitly requested.
+Planning review complete; implementation paused. Do not add application code,
+package manifests, CI workflows, or deployment scripts until an implementation
+phase is explicitly requested. 16i16 hardware validation is deferred until
+device access is available.
 
 ## Product boundaries
 

@@ -9,19 +9,21 @@ included in Linux 6.14+, plus `fcp-server` userspace support and firmware.
 
 Source: [Linux ALSA Focusrite Control/Mixer Drivers](https://github.com/geoffreybennett/linux-fcp).
 
-## Phase 0 platform exit gate
+## 16i16 platform acceptance gate
 
-Before package scope or implementation work for 16i16, prove on target Pi OS
-ARM64 that chosen image provides:
+Before claiming or packaging 16i16 support, prove on target Pi OS ARM64 that
+chosen image provides:
 
 - 64-bit ARM userspace;
 - Linux kernel 6.14 or later, or a maintained matching FCP backport;
 - installable FCP firmware and `fcp-server`;
 - stable USB power and touchscreen-compatible session.
 
+When 16i16 access is available, first run bounded read-only discovery on a
+directly connected Linux development laptop, then repeat target-Pi validation.
 Record sanitized proof that clean install, reboot, and unplug/replug return
-`fcp-server` and required ALSA controls to ready state. This is Phase 0 exit
-gate, not later packaging validation.
+`fcp-server` and required ALSA controls to ready state. This is a 16i16
+acceptance gate, not a blocker for Phase 1 foundation or Solo/mock work.
 
 Cross-compiling daemon/UI does not package or replace kernel-module and FCP
 dependencies. These install on target Pi as deployment prerequisites.
@@ -51,6 +53,15 @@ contents`, and journal output with relevant device/card filters and line caps.
 Redact serial numbers, LAN addresses/tokens, usernames, and unrelated system
 data before saving captures; retain only controls, versions, and lifecycle
 evidence needed for fixture.
+
+## 16i16 routing questions to verify
+
+Phase 2 must determine from FCP/ALSA capabilities whether the digitally
+represented front-panel Output control can be assigned beyond analogue monitor
+outputs, specifically to an optical-S/PDIF output or its routed mix gain. Record
+the available targets, readback/events after physical knob movement, and the
+safe configuration/restart behavior. Do not assume Focusrite Control 2 behavior
+is exposed through Linux until capture proves it.
 
 ## Hardware acceptance matrix
 

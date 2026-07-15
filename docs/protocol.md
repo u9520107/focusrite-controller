@@ -20,7 +20,8 @@ Unix-socket clients use equivalent snapshot, command, and event messages.
 ## State rules
 
 - Snapshot includes `instance_id`, device identity, connection state,
-  capabilities, controls, profiles metadata, and monotonic `revision`.
+  capabilities, controls, per-device user metadata (custom labels and linked
+  groups), profiles metadata, and monotonic `revision`.
 - Event includes `instance_id`, new `revision`, kind, and authoritative changed
   state.
 - Command includes stable `client_id`, client-generated `request_id`, target
@@ -29,6 +30,8 @@ Unix-socket clients use equivalent snapshot, command, and event messages.
   original accepted result and a conflicting reused payload is rejected.
 - Daemon serializes commands, validates capability/range/safety, writes hardware,
   confirms canonical state, then broadcasts result.
+- A non-native linked-group command is one validated, ordered compound command;
+  it reports per-member confirmation and cannot promise atomic hardware writes.
 - Revision gaps, failed event delivery, or changed `instance_id` require full
   snapshot resync. Clients cannot reconstruct state from missed events.
 - Concurrent writers use last confirmed write wins. Clients immediately replace
@@ -37,6 +40,10 @@ Unix-socket clients use equivalent snapshot, command, and event messages.
   Server also bounds queues and coalesces queued fader updates per control.
 
 ## Browser authentication
+
+Browser/LAN access is deferred. Foundation and native touchscreen operation use
+the Unix socket only; see [Network Security](network-security.md). The design
+below is retained as a proposal, not an accepted implementation requirement.
 
 - HTTP API uses bearer token in `Authorization` header.
 - Browser first makes authenticated `POST /api/v1/ws-ticket`; response is a

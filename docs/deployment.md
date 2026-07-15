@@ -35,18 +35,9 @@ for desktop Linux, but is not v1 release goal.
 
 ## Network security
 
-Default bind is loopback. LAN bind is explicit configuration to one configured
-private interface, never all interfaces by default. LAN mode uses random bearer
-tokens stored with owner-only permissions. Plain HTTP exposes theft/replay risk
-on observable Wi-Fi: v1 supports only trusted private networks, no port
-forwarding, and documented token rotation/revocation. Browser HTTP uses bearer
-headers; authenticated HTTP mints short-lived one-use WebSocket tickets. UI is
-same-origin, Origin checks are strict, and CORS never uses wildcard.
-
-V1 does not use HTTPS or self-signed certificates. Home-LAN token auth avoids
-certificate trust friction. Deploy a reverse proxy with trusted TLS if service
-ever reaches untrusted/shared networks or remote access. Never expose service
-through router port forwarding.
+Foundation and native touchscreen operation use only Unix-socket IPC;
+`focusrited` has no TCP listener. LAN access is a later, opt-in design decision.
+See [Network Security](network-security.md).
 
 ## Validation limits
 
