@@ -2,8 +2,15 @@
 
 Local touchscreen and LAN controller for Focusrite Scarlett hardware mixers.
 
-Planning review is complete. Implementation is paused; no executable exists
-yet. Hardware-control implementation waits for Phase 2 discovery.
+Phase 1 foundation is in progress. Hardware-control implementation waits for
+Phase 2 discovery.
+
+## Development setup
+
+Phase 1 contains only build/test foundations. Install Rust through `rustup`,
+use `fnm use` in `web/`, enable Corepack pnpm, then run checks documented in
+[CONTRIBUTING.md](CONTRIBUTING.md). The committed toolchain, Node, pnpm, and
+dependency lockfiles reproduce the setup on another machine.
 
 ## Goal
 

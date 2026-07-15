@@ -11,10 +11,12 @@ acceptance gates: first validate on direct Linux laptop connection when hardware
 access is available, then repeat on target Pi OS ARM64 before claiming 16i16
 support.
 
-## Phase 1: Foundation — ready to start
+## Phase 1: Foundation — in progress
 
 Create Rust workspace and Fict web project. Add locked toolchains, formatting,
 linting, mock-test baseline, cross-build path, and minimal CI checks.
+
+Active execution record: [Phase 1 foundation plan](phases/phase-1-foundation.md).
 
 Exit: WSL reliably builds/lints/tests x86 and arm64 artifacts; no hardware
 control implementation yet.

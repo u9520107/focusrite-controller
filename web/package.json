@@ -1,0 +1,29 @@
+{
+  "name": "focusrite-web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@11.13.0",
+  "engines": {
+    "node": "24.18.0",
+    "pnpm": "11.13.0"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "format": "biome format --write .",
+    "lint": "biome check .",
+    "test": "vitest run --config vitest.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fict": "0.28.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.4",
+    "@fictjs/vite-plugin": "0.28.0",
+    "typescript": "6.0.3",
+    "vite": "8.1.4",
+    "vitest": "4.1.10"
+  }
+}
