@@ -3,6 +3,7 @@
 //! Linux/ALSA adapters and client transports sit outside this module.  Keeping
 //! the policy here makes discovery and state rules testable without hardware.
 
+pub mod profile_store;
 pub mod scarlett2_alsa;
 pub mod worker;
 
@@ -162,6 +163,15 @@ impl<D: Device> Service<D> {
             })
             .collect();
         self.profiles.insert(name, values);
+    }
+
+    pub fn profiles(&self) -> &BTreeMap<String, BTreeMap<ControlId, Value>> {
+        &self.profiles
+    }
+
+    /// Loads stored profiles only. It never applies hardware state.
+    pub fn set_profiles(&mut self, profiles: BTreeMap<String, BTreeMap<ControlId, Value>>) {
+        self.profiles = profiles;
     }
 
     /// Profile writes are ordered by stable control ID. Hardware cannot make a

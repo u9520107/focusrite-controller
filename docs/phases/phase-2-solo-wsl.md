@@ -16,8 +16,8 @@ USB/IP detach/re-attach recovery also passed: offline state advanced its
 revision, then recovery resnapshotted the Solo. This validates WSL2 device loss
 and recovery only; it does not replace later physical unplug evidence.
 
-Next: use observed capabilities to extend state reconciliation. Disk-backed
-profile persistence and local IPC remain later Phase 2/4 work respectively.
+Next: add daemon startup/configuration around atomic disk-backed profiles, then
+define profile identity/capability binding. Local IPC remains Phase 4 work.
 
 Dependency decision: direct ALSA access uses `alsa` 0.12.0 (MIT OR Apache-2.0),
 reviewed compatible with this project's MIT distribution. It needs `pkg-config`
