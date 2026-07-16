@@ -219,16 +219,16 @@ fn snapshot_from(discovery: Discovery, writable_controls: &BTreeSet<ControlId>) 
 }
 
 fn value_domain(value_type: ValueType, count: u32) -> ValueDomain {
-    if count != 1 {
-        return ValueDomain::Array;
-    }
     match value_type {
-        ValueType::Boolean => ValueDomain::Boolean,
-        ValueType::Integer => ValueDomain::Integer,
-        ValueType::Integer64 => ValueDomain::Integer64,
         ValueType::Enumerated | ValueType::Bytes | ValueType::Iec958 | ValueType::None => {
             ValueDomain::Unsupported
         }
+        ValueType::Boolean | ValueType::Integer | ValueType::Integer64 if count != 1 => {
+            ValueDomain::Array
+        }
+        ValueType::Boolean => ValueDomain::Boolean,
+        ValueType::Integer => ValueDomain::Integer,
+        ValueType::Integer64 => ValueDomain::Integer64,
     }
 }
 
@@ -387,5 +387,41 @@ mod tests {
         controls[0].count = 2;
 
         assert_ne!(original, schema_fingerprint(&controls));
+    }
+
+    #[test]
+    fn multi_value_unsupported_types_stay_unsupported() {
+        for value_type in [
+            ValueType::Enumerated,
+            ValueType::Bytes,
+            ValueType::Iec958,
+            ValueType::None,
+        ] {
+            assert_eq!(value_domain(value_type, 2), ValueDomain::Unsupported);
+        }
+    }
+
+    #[test]
+    fn unavailable_control_keeps_metadata_without_a_value() {
+        let id = control_id(48);
+        let snapshot = snapshot_from(
+            Discovery {
+                device_id: "mock-device".into(),
+                controls: vec![Control {
+                    id: id.clone(),
+                    name: "Direct Monitor Playback Switch".into(),
+                    numid: 48,
+                    value_type: ValueType::Boolean,
+                    count: 1,
+                    values: Vec::new(),
+                    available: false,
+                }],
+            },
+            &BTreeSet::new(),
+        );
+
+        assert_eq!(snapshot.capabilities[0].domain, ValueDomain::Boolean);
+        assert!(!snapshot.capabilities[0].available);
+        assert!(!snapshot.values.contains_key(&id));
     }
 }

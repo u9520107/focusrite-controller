@@ -22,7 +22,7 @@ Execution record: [Phase 1 foundation plan](phases/phase-1-foundation.md).
 Exit: WSL reliably formats, lints, and tests Rust workspace; no hardware
 control or cross-compilation implementation.
 
-## Phase 2: Solo service development in WSL — planned
+## Phase 2: Solo service development in WSL — complete (WSL scope)
 
 Execution record: [Phase 2 Solo WSL plan](phases/phase-2-solo-wsl.md).
 

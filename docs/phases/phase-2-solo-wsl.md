@@ -2,7 +2,8 @@
 
 ## Status
 
-Active on branch `phase-2-solo-wsl`.
+Complete for WSL scope on branch `phase-2-solo-wsl`. Native-Linux/Pi hardware
+validation moves to Phase 3.
 
 Completed: WSL2 USB handoff documented; sanitized read-only Solo control
 [fixture](../../crates/focusrited/tests/fixtures/scarlett-solo-4th-gen.md)
@@ -66,13 +67,13 @@ directly to WSL2. This is development evidence, not Pi compatibility proof.
 
 - [x] Mock tests cover writes, failures, disconnect/reconnect, and persistence.
 - [x] Sanitized Solo discovery fixture records supported controls.
-- [ ] Unsupported/unreadable controls remain explicit without taking device offline.
+- [x] Unsupported/unreadable controls remain explicit without taking device offline.
 - [x] Solo external-control reconciliation is verified through WSL2 without a
   daemon write.
 - [x] Solo USB/IP disconnect/reconnect is verified through WSL2 without a
   daemon write.
-- [ ] Physical Solo unplug/replug is deferred to native Linux or Pi validation.
-- [ ] Pi and 16i16 work remain deferred to Phases 3 and 7.
+- Physical Solo unplug/replug is deferred to native Linux or Pi validation.
+- Pi and 16i16 work remain deferred to Phases 3 and 7.
 
 ## Update rule
 
