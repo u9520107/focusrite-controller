@@ -21,9 +21,11 @@ Profile startup uses service-owned `/var/lib/focusrited/profiles` by default;
 `--profile-store PATH` overrides it. Read-only daemon startup requires
 `--card CARD`, and polls state reconciliation through serial device worker.
 Loading never applies hardware state.
-Current WSL session has Solo listed by `/proc/asound` but no `/dev/snd` nodes,
-so executable startup validation is blocked until USB/IP/WSL device nodes are
-restored. No daemon write occurred.
+Initial executable startup validation was blocked because WSL had Solo listed
+by `/proc/asound` but no `/dev/snd` nodes. USB/IP/WSL device nodes were restored
+without a daemon write.
+Device nodes were restored and read-only `focusrited --card 0` ran against the
+attached Solo on 2026-07-15 until Ctrl-C, with no daemon output or write.
 Profiles bind to adapter-provided device identity and capability-schema version;
 they reject mismatches before any command. Local IPC remains Phase 4 work.
 
