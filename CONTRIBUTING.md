@@ -5,17 +5,20 @@
 - Linux/WSL with a C toolchain (`cc`) for Rust crates that compile native code.
 - [rustup](https://rustup.rs/). The committed `rust-toolchain.toml` installs the
   selected compiler, Clippy, rustfmt, and ARM64 target.
-- [fnm](https://github.com/Schniz/fnm) or compatible `.nvmrc` manager.
-- Corepack, bundled with Node, to activate pinned pnpm.
+
+On Debian/Ubuntu/WSL, install the C toolchain with:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential
+```
+
+On Fedora, install `gcc` and `make`.
 
 ## Setup
 
 ```sh
 rustup show
-cd web
-fnm use
-corepack enable pnpm
-pnpm install --frozen-lockfile
 ```
 
 ## Checks
@@ -24,22 +27,11 @@ pnpm install --frozen-lockfile
 cargo fmt --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
-
-cd web
-pnpm lint
-pnpm typecheck
-pnpm test
-pnpm build
 ```
 
-`web/dist/` is static production output. Later `focusrited` will serve it;
-Vite is not a production server dependency.
-
-## Current web limitation
-
-The published Fict 0.28.0 runtime and Vite plugin omit their declared `dist/`
-files. `pnpm lint` and `pnpm test` run, but Fict-dependent `pnpm typecheck`
-and `pnpm build` remain blocked pending an upstream release with those files.
+Web setup is deferred to Phase 5 while upstream Fict packages are repaired.
+Later `focusrited` will serve static web output; Vite will not be a production
+server dependency.
 
 ## Deferred tooling
 

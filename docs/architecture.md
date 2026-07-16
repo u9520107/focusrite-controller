@@ -122,6 +122,13 @@ confirmed. Hardware cannot guarantee atomicity for a non-native group write.
 External ALSA/front-panel mutations still reconcile each member's canonical
 state and create a new revision.
 
+Where discovery proves a readable front-panel monitor level and writable
+optical-mix master gain, users may enable a one-way mirror binding: a confirmed
+front-panel level change writes the mapped optical gain. It is off by default,
+available only for a dedicated optical mix, and reports partial-write failure.
+This is not a native monitor group and must not feed optical changes back into
+the front-panel control.
+
 ## Persistence
 
 Persist only daemon preferences, per-device user metadata (labels and linked

@@ -13,8 +13,9 @@ support.
 
 ## Phase 1: Foundation — in progress
 
-Create Rust workspace and Fict web project. Add locked toolchains, formatting,
-linting, mock-test baseline, cross-build path, and minimal CI checks.
+Create Rust workspace. Add locked toolchains, formatting, linting, mock-test
+baseline, cross-build path, and minimal CI checks. Web setup is deferred to
+Phase 5 while Fict resolves its published-package issue.
 
 Active execution record: [Phase 1 foundation plan](phases/phase-1-foundation.md).
 
@@ -66,18 +67,24 @@ First accept LAN authentication policy and when TLS becomes required. Then have
 `focusrited` serve the LAN listener, REST snapshot/commands, events,
 instance/revision resync, idempotency, bounded/coalescing queues, API
 integration tests, and the responsive Fict SPA using only API state, including
-designated main volume and mute controls.
+designated main volume and mute controls. Establish the web toolchain here:
+pin Node through `.nvmrc`/fnm and pnpm through Corepack, then add a verified
+Fict release with Vite static builds, compatible TypeScript, Biome, and Vitest.
+`focusrited` serves the resulting static assets; Vite is not a production
+server dependency.
 
 Exit: phone browser controls hardware on accepted LAN security model; two mock
 clients converge after concurrent updates, restart/resync, revision gap, and
 reconnect.
 
-## Phase 6: Macro-pad controller — planned
+## Phase 6: Optional macro-pad controller — planned
 
 Implement optional USB macro-pad adapter through the existing local command API.
 Start with one main output/mix volume and mute encoder plus two linked input-pair
 level and mute encoders. Add capability-discovered, user-configured button
-actions only after the initial mapping works.
+actions only after the initial mapping works. A proven front-panel-to-optical
+mirror binding is the no-extra-hardware path for optical monitoring; macro-pad
+remains an optional additional control surface.
 
 Exit: configured macro-pad controls remain reconciled with touchscreen and web
 clients; macro-pad failure or removal does not affect daemon/device operation.

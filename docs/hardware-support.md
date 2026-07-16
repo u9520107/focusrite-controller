@@ -57,11 +57,11 @@ evidence needed for fixture.
 ## 16i16 routing questions to verify
 
 Phase 2 must determine from FCP/ALSA capabilities whether the digitally
-represented front-panel Output control can be assigned beyond analogue monitor
-outputs, specifically to an optical-S/PDIF output or its routed mix gain. Record
-the available targets, readback/events after physical knob movement, and the
-safe configuration/restart behavior. Do not assume Focusrite Control 2 behavior
-is exposed through Linux until capture proves it.
+represented front-panel Output control reports its level and whether an
+optical-S/PDIF-routed mix exposes writable master gain. Record both controls,
+their ranges, readback/events after physical knob movement, and safe
+configuration/restart behavior. Do not assume Focusrite Control 2 behavior is
+exposed through Linux until capture proves it.
 
 ## Hardware acceptance matrix
 

@@ -3,8 +3,8 @@
 ## Project license
 
 Focusrite Controller is licensed under the MIT License. The authoritative text
-is in the repository-root [LICENSE](../LICENSE). Rust and web package metadata
-use the SPDX identifier `MIT`.
+is in the repository-root [LICENSE](../LICENSE). Rust metadata uses the SPDX
+identifier `MIT`; future web package metadata must do the same.
 
 `Focusrite` and `Scarlett` remain trademarks of Focusrite Audio Engineering
 Limited. The project license grants no trademark rights and does not imply
