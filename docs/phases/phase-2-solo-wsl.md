@@ -34,6 +34,8 @@ they reject mismatches before any command. Phase 2 stops at persistence and
 bounded adapter-write validation; local profile save/list/dry-run/apply begins
 in Phase 4a, LAN profile operations in Phase 5, and profile-safety acceptance
 in Phase 8.
+Integer-range and enum-item metadata are deferred to Phase 3 native-Linux
+validation; those controls stay explicit but non-writable in Phase 2.
 
 Dependency decision: direct ALSA access uses `alsa` 0.12.0 (MIT OR Apache-2.0),
 reviewed compatible with this project's MIT distribution. It needs `pkg-config`

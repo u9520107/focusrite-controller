@@ -35,6 +35,9 @@ evidence only.
 Phase 2 owns profile storage, device/schema binding, and bounded adapter write
 validation. It does not add user-facing save/list/dry-run/apply operations or
 general multi-control hardware application.
+Integer-range and enum-item discovery, plus controlled writes for those
+domains, are deferred to Phase 3 native-Linux validation. Until then, those
+domains remain explicit but non-writable.
 
 Exit: mock and Solo-on-WSL tests cover supported control behavior, failure,
 disconnect/reconnect, and persistence; unsupported controls are explicit.

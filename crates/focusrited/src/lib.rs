@@ -26,7 +26,7 @@ pub enum ValueDomain {
     Boolean,
     Integer,
     Integer64,
-    Enumerated(Vec<i32>),
+    Unsupported,
     Array,
 }
 
@@ -129,9 +129,7 @@ impl<D: Device> Service<D> {
         if !capability.writable {
             return Err(ServiceError::ReadOnly);
         }
-        if !matches_domain(&value, &capability.domain)
-            || matches!(&capability.domain, ValueDomain::Enumerated(values) if !values.contains(match &value { Value::Integer(value) => value, _ => unreachable!() }))
-        {
+        if !matches_domain(&value, &capability.domain) {
             return Err(ServiceError::InvalidValue);
         }
         if let Value::Integer(number) = value
@@ -238,10 +236,7 @@ fn matches_domain(value: &Value, domain: &ValueDomain) -> bool {
     matches!(
         (value, domain),
         (Value::Bool(_), ValueDomain::Boolean)
-            | (
-                Value::Integer(_),
-                ValueDomain::Integer | ValueDomain::Enumerated(_)
-            )
+            | (Value::Integer(_), ValueDomain::Integer)
             | (Value::Integer64(_), ValueDomain::Integer64)
             | (Value::Array(_), ValueDomain::Array)
     )

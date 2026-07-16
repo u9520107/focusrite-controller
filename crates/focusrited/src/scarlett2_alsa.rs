@@ -28,6 +28,7 @@ pub struct Control {
     pub name: String,
     pub numid: u32,
     pub value_type: ValueType,
+    pub count: u32,
     pub values: Vec<ObservedValue>,
     /// A single unreadable control must not make the whole card offline.
     pub available: bool,
@@ -124,20 +125,35 @@ pub fn discover(card: &str) -> Result<Discovery, DiscoveryError> {
                 .get_name()
                 .map(str::to_owned)
                 .unwrap_or_else(|_| format!("alsa-numid:{numid}"));
-            match (element.info(), element.read()) {
-                (Ok(info), Ok(value)) => Some(Control {
-                    id: control_id(numid),
-                    name,
-                    numid,
-                    value_type: value_type(info.get_type()),
-                    values: observed_values(&value, info.get_type(), info.get_count()),
-                    available: true,
-                }),
-                _ => Some(Control {
+            let Ok(info) = element.info() else {
+                return Some(Control {
                     id: control_id(numid),
                     name,
                     numid,
                     value_type: ValueType::None,
+                    count: 0,
+                    values: Vec::new(),
+                    available: false,
+                });
+            };
+            let value_type = value_type(info.get_type());
+            let count = info.get_count();
+            match element.read() {
+                Ok(value) => Some(Control {
+                    id: control_id(numid),
+                    name,
+                    numid,
+                    value_type,
+                    count,
+                    values: observed_values(&value, info.get_type(), count),
+                    available: true,
+                }),
+                Err(_) => Some(Control {
+                    id: control_id(numid),
+                    name,
+                    numid,
+                    value_type,
+                    count,
                     values: Vec::new(),
                     available: false,
                 }),
@@ -180,10 +196,9 @@ fn snapshot_from(discovery: Discovery, writable_controls: &BTreeSet<ControlId>) 
     let mut values = std::collections::BTreeMap::new();
     let capability_schema = schema_fingerprint(&discovery.controls);
     for control in discovery.controls {
-        let value = control_value(&control.values);
         capabilities.push(ControlCapability {
             id: control.id.clone(),
-            domain: value_domain(control.value_type, &control.values),
+            domain: value_domain(control.value_type, control.count),
             writable: control.value_type == ValueType::Boolean
                 && control.values.len() == 1
                 && writable_controls.contains(&control.id),
@@ -191,7 +206,9 @@ fn snapshot_from(discovery: Discovery, writable_controls: &BTreeSet<ControlId>) 
             minimum: None,
             maximum: None,
         });
-        values.insert(control.id, value);
+        if control.available {
+            values.insert(control.id, control_value(&control.values));
+        }
     }
     DeviceSnapshot {
         device_id: discovery.device_id,
@@ -201,21 +218,17 @@ fn snapshot_from(discovery: Discovery, writable_controls: &BTreeSet<ControlId>) 
     }
 }
 
-fn value_domain(value_type: ValueType, values: &[ObservedValue]) -> ValueDomain {
+fn value_domain(value_type: ValueType, count: u32) -> ValueDomain {
+    if count != 1 {
+        return ValueDomain::Array;
+    }
     match value_type {
         ValueType::Boolean => ValueDomain::Boolean,
         ValueType::Integer => ValueDomain::Integer,
         ValueType::Integer64 => ValueDomain::Integer64,
-        ValueType::Enumerated => ValueDomain::Enumerated(
-            values
-                .iter()
-                .filter_map(|value| match value {
-                    ObservedValue::Enumerated(value) => i32::try_from(*value).ok(),
-                    _ => None,
-                })
-                .collect(),
-        ),
-        ValueType::Bytes | ValueType::Iec958 | ValueType::None => ValueDomain::Array,
+        ValueType::Enumerated | ValueType::Bytes | ValueType::Iec958 | ValueType::None => {
+            ValueDomain::Unsupported
+        }
     }
 }
 
@@ -223,11 +236,8 @@ fn schema_fingerprint(controls: &[Control]) -> String {
     let mut hash = 0xcbf29ce484222325u64;
     for control in controls {
         for byte in format!(
-            "{}:{:?}:{}:{};",
-            control.id.0,
-            control.value_type,
-            control.available,
-            control.values.len()
+            "{}:{:?}:{};",
+            control.id.0, control.value_type, control.count
         )
         .bytes()
         {
@@ -325,6 +335,7 @@ mod tests {
                     name: "Direct Monitor Playback Switch".into(),
                     numid: 48,
                     value_type: ValueType::Boolean,
+                    count: 1,
                     values: vec![ObservedValue::Boolean(false)],
                     available: true,
                 }],
@@ -347,6 +358,7 @@ mod tests {
                     name: "Direct Monitor Playback Switch".into(),
                     numid: 48,
                     value_type: ValueType::Boolean,
+                    count: 1,
                     values: vec![ObservedValue::Boolean(false)],
                     available: true,
                 }],
@@ -358,17 +370,21 @@ mod tests {
     }
 
     #[test]
-    fn schema_fingerprint_changes_with_capabilities() {
+    fn schema_fingerprint_ignores_availability_but_tracks_shape() {
         let mut controls = vec![Control {
             id: control_id(48),
             name: "Direct Monitor Playback Switch".into(),
             numid: 48,
             value_type: ValueType::Boolean,
+            count: 1,
             values: vec![ObservedValue::Boolean(false)],
             available: true,
         }];
         let original = schema_fingerprint(&controls);
         controls[0].available = false;
+
+        assert_eq!(original, schema_fingerprint(&controls));
+        controls[0].count = 2;
 
         assert_ne!(original, schema_fingerprint(&controls));
     }
