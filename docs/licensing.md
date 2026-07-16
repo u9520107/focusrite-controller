@@ -28,7 +28,7 @@ archive:
 
 Do not commit a static third-party notice inventory during early development:
 it becomes stale as lockfiles change. Generate and verify it as part of
-packaging in Phase 7.
+packaging in Phase 8.
 
 ## Upstream patches and contributions
 

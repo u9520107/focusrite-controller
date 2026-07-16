@@ -4,18 +4,17 @@
 
 - Primary appliance: Raspberry Pi 5, 64-bit Linux,
   `aarch64-unknown-linux-gnu`.
-- Later desktop Linux: `x86_64-unknown-linux-gnu`.
+- Development host: WSL on `x86_64-unknown-linux-gnu`; not a deployment target.
 
-WSL is development/build host. Cross-build is default to avoid Pi compilation.
-Native Pi build is an allowed fallback for diagnosing toolchain or target-only
-issues, not release workflow.
+WSL is development host. Pi-native validation comes first; choose a cross-build
+path only if that validated deployment needs one.
 
 ## Build policy
 
-Implementation will pin Rust, Node, pnpm, and Fict versions. Rust cross-build
-uses a pinned container/sysroot or `cargo-zigbuild`; choice is deferred until
-first executable dependency needs are known. Web assets build on development/CI
-host; Pi requires no Node, Rust compiler, or web build tools.
+Implementation will pin Rust, Node, pnpm, and Fict versions. Any Rust
+cross-build uses a pinned container/sysroot or `cargo-zigbuild`; choice is
+deferred to Pi validation. Web assets build on development/CI host; Pi requires
+no Node, Rust compiler, or web build tools for packaged deployment.
 
 ## Packaging
 
@@ -41,6 +40,6 @@ See [Network Security](network-security.md).
 
 ## Validation limits
 
-CI can lint, test mock adapters, build arm64 artifacts, and verify packages.
-Only deployed Linux hardware can prove USB, ALSA/FCP, touchscreen, reboot, and
-unplug behavior. QEMU is not hardware confidence.
+CI can lint, test mock adapters, and later verify packages. Only deployed Linux
+hardware can prove USB, ALSA/FCP, touchscreen, reboot, and unplug behavior.
+QEMU is not hardware confidence.

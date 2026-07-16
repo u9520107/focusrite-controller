@@ -22,8 +22,8 @@ chosen image provides:
 When 16i16 access is available, first run bounded read-only discovery on a
 directly connected Linux development laptop, then repeat target-Pi validation.
 Record sanitized proof that clean install, reboot, and unplug/replug return
-`fcp-server` and required ALSA controls to ready state. This is a 16i16
-acceptance gate, not a blocker for Phase 1 foundation or Solo/mock work.
+`fcp-server` and required ALSA controls to ready state. This is a Phase 7
+acceptance gate, not a blocker for Phase 1 foundation or Phase 2 Solo/mock work.
 
 Cross-compiling daemon/UI does not package or replace kernel-module and FCP
 dependencies. These install on target Pi as deployment prerequisites.
@@ -56,7 +56,7 @@ evidence needed for fixture.
 
 ## 16i16 routing questions to verify
 
-Phase 2 must determine from FCP/ALSA capabilities whether the digitally
+Phase 7 must determine from FCP/ALSA capabilities whether the digitally
 represented front-panel Output control reports its level and whether an
 optical-S/PDIF-routed mix exposes writable master gain. Record both controls,
 their ranges, readback/events after physical knob movement, and safe

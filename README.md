@@ -2,15 +2,14 @@
 
 Local touchscreen and LAN controller for Focusrite Scarlett hardware mixers.
 
-Phase 1 foundation is in progress. Hardware-control implementation waits for
-Phase 2 discovery.
+For delivery status and phase execution plans, see the
+[roadmap](docs/roadmap.md).
 
 ## Development setup
 
-Phase 1 contains Rust build/test foundations. Install Rust through `rustup`,
-then run checks documented in [CONTRIBUTING.md](CONTRIBUTING.md). The committed
-Rust toolchain and lockfile reproduce the setup on another machine. Web tooling
-is deferred to Phase 5 while Fict resolves its published-package issue.
+Install Rust through `rustup`, then run checks documented in
+[CONTRIBUTING.md](CONTRIBUTING.md). The committed Rust toolchain and lockfile
+reproduce the setup on another machine.
 
 ## License
 
@@ -39,12 +38,6 @@ or play host audio in v1.
 
 Exact settings are discovered at runtime. Solo is useful for control-flow
 testing, but does not represent 16i16 routing or monitor-group coverage.
-
-## Status
-
-Architecture and delivery plan are documented in [docs/](docs/). Solo/mock
-discovery precedes hardware-control implementation; 16i16-specific claims wait
-for real FCP captures and target-Pi validation.
 
 ## Non-affiliation
 

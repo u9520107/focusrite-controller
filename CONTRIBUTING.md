@@ -4,7 +4,7 @@
 
 - Linux/WSL with a C toolchain (`cc`) for Rust crates that compile native code.
 - [rustup](https://rustup.rs/). The committed `rust-toolchain.toml` installs the
-  selected compiler, Clippy, rustfmt, and ARM64 target.
+  selected compiler, Clippy, and rustfmt.
 
 On Debian/Ubuntu/WSL, install the C toolchain with:
 
@@ -35,6 +35,5 @@ server dependency.
 
 ## Deferred tooling
 
-ARM64 linking needs a chosen sysroot or Zig route. Do not install a cross-build
-toolchain until its first real link test; `rust-toolchain.toml` already installs
-the Rust ARM64 target.
+Pi-native validation and any cross-build toolchain are Phase 3 work. Do not
+install one until that phase identifies a real deployment need.

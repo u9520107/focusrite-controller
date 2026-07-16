@@ -11,34 +11,39 @@ acceptance gates: first validate on direct Linux laptop connection when hardware
 access is available, then repeat on target Pi OS ARM64 before claiming 16i16
 support.
 
-## Phase 1: Foundation — in progress
+## Phase 1: WSL Rust foundation — complete
 
-Create Rust workspace. Add locked toolchains, formatting, linting, mock-test
-baseline, cross-build path, and minimal CI checks. Web setup is deferred to
-Phase 5 while Fict resolves its published-package issue.
+Create Rust workspace. Add locked WSL toolchain, formatting, linting,
+mock-test baseline, and minimal CI checks. Web setup is deferred to Phase 5
+while Fict resolves its published-package issue.
 
-Active execution record: [Phase 1 foundation plan](phases/phase-1-foundation.md).
+Execution record: [Phase 1 foundation plan](phases/phase-1-foundation.md).
 
-Exit: WSL reliably builds/lints/tests x86 and arm64 artifacts; no hardware
-control implementation yet.
+Exit: WSL reliably formats, lints, and tests Rust workspace; no hardware
+control or cross-compilation implementation.
 
-## Phase 2: Hardware discovery spike — planned
+## Phase 2: Solo service development in WSL — planned
 
-Implement read-only capability discovery with mock fixture format. Validate Solo
-first. When 16i16 access is available, validate FCP on direct Linux laptop USB
-connection, then repeat target Pi setup. Map supported ALSA/FCP controls, events,
-service lifecycle, external/front-panel changes, and any bounded read-only meter
-source.
+Execution record: [Phase 2 Solo WSL plan](phases/phase-2-solo-wsl.md).
 
-Exit: sanitized bounded captures prove required v1 control model; unsupported
-controls are explicit; FCP readiness and external mutation behavior are known.
+Route Scarlett Solo directly into WSL2. Implement bounded read-only discovery,
+mock fixtures, capability model, device worker, state reconciliation,
+reconnect, validation, and explicit profile persistence. Validate Solo controls
+and external/front-panel changes through WSL2, while treating it as development
+evidence only.
 
-## Phase 3: Daemon and device core — planned
+Exit: mock and Solo-on-WSL tests cover supported control behavior, failure,
+disconnect/reconnect, and persistence; unsupported controls are explicit.
 
-Implement capability model, mock adapter, serialized device worker, state
-reconciliation, reconnect, validation, and explicit profile persistence.
+## Phase 3: Pi compatibility verification — planned
 
-Exit: mock tests cover writes, failure, disconnect/reconnect, and persistence.
+Prepare target Pi and validate current Solo service natively on Pi Linux. Find
+and fix target-only build, ALSA, USB, system-service, reboot, and unplug/replug
+issues. Cross-compilation may be introduced only if it helps this validated Pi
+deployment path.
+
+Exit: Solo service runs reliably on prepared Pi; target-specific limits and
+deployment prerequisites are recorded.
 
 ## Phase 4a: Local touchscreen — planned
 
@@ -53,10 +58,10 @@ concurrent local-client updates.
 
 ## Phase 4b: Local metering — planned
 
-If Phase 2 discovery identifies a supported, bounded read-only ALSA/FCP meter
-source, add capability-discovered meter events and touchscreen rendering. No
-audio capture, recording, playback, or host-audio pipeline is added. Devices
-without a proven meter source omit the feature.
+If Phase 2 or Phase 7 discovery identifies a supported, bounded read-only
+ALSA/FCP meter source, add capability-discovered meter events and touchscreen
+rendering. No audio capture, recording, playback, or host-audio pipeline is
+added. Devices without a proven meter source omit the feature.
 
 Exit: supported hardware shows current meter values without affecting command
 ordering or device control; unsupported hardware remains fully usable.
@@ -89,7 +94,18 @@ remains an optional additional control surface.
 Exit: configured macro-pad controls remain reconciled with touchscreen and web
 clients; macro-pad failure or removal does not affect daemon/device operation.
 
-## Phase 7: Packaging and acceptance — planned
+## Phase 7: 16i16 verification and hardening — planned
+
+When hardware becomes available, run bounded read-only discovery on direct
+Linux first, then validate FCP, `fcp-server`, ALSA controls, lifecycle, and
+reconciliation on Pi. Harden service behavior from those findings. Solo success
+does not imply 16i16 routing or monitor-group support.
+
+Exit: sanitized 16i16 evidence proves supported controls and Pi FCP readiness;
+service handles FCP recovery, external changes, and documented unsupported
+capabilities.
+
+## Phase 8: Packaging and acceptance — planned
 
 Package systemd/udev/static assets as arm64 `.deb`. Run Solo and 16i16 matrix:
 reboot, unplug/replug, FCP lifecycle recovery, external ALSA/front-panel
@@ -110,5 +126,5 @@ Exit: clean Pi install provides stable v1 appliance.
 1. Pi OS release/kernel/FCP installation path.
 2. Touchscreen resolution, orientation, compositor/kiosk method.
 3. Exact device firmware and complete control matrix.
-4. Cross-build implementation: container/sysroot versus Zig.
+4. Cross-build implementation, if Pi validation shows native deployment needs it.
 5. Pebble SDK, companion transport, and authentication UX.
