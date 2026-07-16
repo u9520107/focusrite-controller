@@ -230,7 +230,7 @@ fn invalid_error(message: &str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ControlCapability, DeviceError, DeviceSnapshot};
+    use crate::{ControlCapability, DeviceError, DeviceSnapshot, ValueDomain};
 
     #[test]
     fn save_load_round_trip_is_atomic_format() {
@@ -282,6 +282,7 @@ mod tests {
             capability_schema: "mock-v1".into(),
             capabilities: vec![ControlCapability {
                 id: control.clone(),
+                domain: ValueDomain::Integer,
                 writable: true,
                 available: true,
                 minimum: Some(0),

@@ -22,8 +22,18 @@ pub enum Value {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ValueDomain {
+    Boolean,
+    Integer,
+    Integer64,
+    Enumerated(Vec<i32>),
+    Array,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ControlCapability {
     pub id: ControlId,
+    pub domain: ValueDomain,
     pub writable: bool,
     pub available: bool,
     pub minimum: Option<i32>,
@@ -68,6 +78,7 @@ pub enum ServiceError {
     Unavailable,
     ReadOnly,
     InvalidValue,
+    UnconfirmedWrite,
     UnknownProfile,
     ProfileBindingMismatch,
 }
@@ -118,6 +129,11 @@ impl<D: Device> Service<D> {
         if !capability.writable {
             return Err(ServiceError::ReadOnly);
         }
+        if !matches_domain(&value, &capability.domain)
+            || matches!(&capability.domain, ValueDomain::Enumerated(values) if !values.contains(match &value { Value::Integer(value) => value, _ => unreachable!() }))
+        {
+            return Err(ServiceError::InvalidValue);
+        }
         if let Value::Integer(number) = value
             && (capability.minimum.is_some_and(|minimum| number < minimum)
                 || capability.maximum.is_some_and(|maximum| number > maximum))
@@ -125,9 +141,13 @@ impl<D: Device> Service<D> {
             return Err(ServiceError::InvalidValue);
         }
         self.device
-            .write(control, value)
+            .write(control, value.clone())
             .map_err(ServiceError::Device)?;
-        self.refresh()
+        self.refresh()?;
+        if self.snapshot.values.get(control) != Some(&value) {
+            return Err(ServiceError::UnconfirmedWrite);
+        }
+        Ok(())
     }
 
     /// Reconcile ALSA/front-panel changes with authoritative hardware state.
@@ -214,6 +234,19 @@ impl<D: Device> Service<D> {
     }
 }
 
+fn matches_domain(value: &Value, domain: &ValueDomain) -> bool {
+    matches!(
+        (value, domain),
+        (Value::Bool(_), ValueDomain::Boolean)
+            | (
+                Value::Integer(_),
+                ValueDomain::Integer | ValueDomain::Enumerated(_)
+            )
+            | (Value::Integer64(_), ValueDomain::Integer64)
+            | (Value::Array(_), ValueDomain::Array)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +254,7 @@ mod tests {
     struct MockDevice {
         snapshot: DeviceSnapshot,
         fail_write: bool,
+        ignore_write: bool,
     }
 
     impl Device for MockDevice {
@@ -232,7 +266,9 @@ mod tests {
             if self.fail_write {
                 return Err(DeviceError::Failed);
             }
-            self.snapshot.values.insert(control.clone(), value);
+            if !self.ignore_write {
+                self.snapshot.values.insert(control.clone(), value);
+            }
             Ok(())
         }
     }
@@ -245,6 +281,7 @@ mod tests {
                 capability_schema: "mock-v1".into(),
                 capabilities: vec![ControlCapability {
                     id: volume.clone(),
+                    domain: ValueDomain::Integer,
                     writable: true,
                     available: true,
                     minimum: Some(0),
@@ -253,6 +290,7 @@ mod tests {
                 values: BTreeMap::from([(volume, Value::Integer(50))]),
             },
             fail_write: false,
+            ignore_write: false,
         }
     }
 
@@ -296,6 +334,31 @@ mod tests {
             Err(ServiceError::Device(DeviceError::Failed))
         );
         assert_eq!(service.snapshot().values[&volume], Value::Integer(50));
+    }
+
+    #[test]
+    fn ignored_write_is_not_reported_as_confirmed() {
+        let volume = ControlId("output.volume".into());
+        let mut device = mock();
+        device.ignore_write = true;
+        let mut service = Service::connect(device).unwrap();
+
+        assert_eq!(
+            service.command(&volume, Value::Integer(75)),
+            Err(ServiceError::UnconfirmedWrite)
+        );
+        assert_eq!(service.snapshot().values[&volume], Value::Integer(50));
+    }
+
+    #[test]
+    fn command_rejects_value_with_wrong_domain() {
+        let volume = ControlId("output.volume".into());
+        let mut service = Service::connect(mock()).unwrap();
+
+        assert_eq!(
+            service.command(&volume, Value::Bool(true)),
+            Err(ServiceError::InvalidValue)
+        );
     }
 
     #[test]

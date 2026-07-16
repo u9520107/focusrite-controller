@@ -104,7 +104,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::{ControlCapability, ControlId, DeviceError, DeviceSnapshot, Value};
+    use crate::{ControlCapability, ControlId, DeviceError, DeviceSnapshot, Value, ValueDomain};
 
     #[test]
     fn profile_store_path_defaults_and_overrides() {
@@ -143,6 +143,7 @@ mod tests {
             capability_schema: "mock-v1".into(),
             capabilities: vec![ControlCapability {
                 id: control.clone(),
+                domain: ValueDomain::Integer,
                 writable: true,
                 available: true,
                 minimum: Some(0),

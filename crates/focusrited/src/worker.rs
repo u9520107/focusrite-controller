@@ -174,7 +174,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
-    use crate::{ControlCapability, DeviceError};
+    use crate::{ControlCapability, DeviceError, ValueDomain};
 
     struct MockDevice(DeviceSnapshot);
 
@@ -197,6 +197,7 @@ mod tests {
             capability_schema: "mock-v1".into(),
             capabilities: vec![ControlCapability {
                 id: volume.clone(),
+                domain: ValueDomain::Integer,
                 writable: true,
                 available: true,
                 minimum: Some(0),

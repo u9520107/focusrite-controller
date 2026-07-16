@@ -64,6 +64,7 @@ directly to WSL2. This is development evidence, not Pi compatibility proof.
 
 - [x] Mock tests cover writes, failures, disconnect/reconnect, and persistence.
 - [x] Sanitized Solo discovery fixture records supported controls.
+- [ ] Unsupported/unreadable controls remain explicit without taking device offline.
 - [x] Solo external-control reconciliation is verified through WSL2 without a
   daemon write.
 - [x] Solo USB/IP disconnect/reconnect is verified through WSL2 without a

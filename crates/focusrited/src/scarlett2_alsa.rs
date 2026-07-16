@@ -6,14 +6,17 @@
 use std::collections::BTreeSet;
 
 use alsa::{
-    ctl::{ElemType, ElemValue},
+    ctl::{Ctl, ElemType, ElemValue},
     hctl::HCtl,
 };
 
-use crate::{ControlCapability, ControlId, Device, DeviceError, DeviceSnapshot, Value};
+use crate::{
+    ControlCapability, ControlId, Device, DeviceError, DeviceSnapshot, Value, ValueDomain,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Discovery {
+    pub device_id: String,
     pub controls: Vec<Control>,
 }
 
@@ -26,6 +29,8 @@ pub struct Control {
     pub numid: u32,
     pub value_type: ValueType,
     pub values: Vec<ObservedValue>,
+    /// A single unreadable control must not make the whole card offline.
+    pub available: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -87,7 +92,7 @@ impl Scarlett2Alsa {
 impl Device for Scarlett2Alsa {
     fn snapshot(&mut self) -> Result<DeviceSnapshot, DeviceError> {
         discover(&self.card)
-            .map(|discovery| snapshot_from(&self.card, discovery, &self.writable_controls))
+            .map(|discovery| snapshot_from(discovery, &self.writable_controls))
             .map_err(|_| DeviceError::Offline)
     }
 
@@ -112,64 +117,125 @@ pub fn discover(card: &str) -> Result<Discovery, DiscoveryError> {
 
     let controls = control
         .elem_iter()
-        .map(|element| {
-            let id = element
-                .get_id()
-                .map_err(|error| DiscoveryError(error.to_string()))?;
-            let info = element
-                .info()
-                .map_err(|error| DiscoveryError(error.to_string()))?;
-            let value = element
-                .read()
-                .map_err(|error| DiscoveryError(error.to_string()))?;
+        .filter_map(|element| {
+            let id = element.get_id().ok()?;
             let numid = id.get_numid();
-
-            Ok(Control {
-                id: control_id(numid),
-                name: id
-                    .get_name()
-                    .map_err(|error| DiscoveryError(error.to_string()))?
-                    .to_owned(),
-                numid,
-                value_type: value_type(info.get_type()),
-                values: observed_values(&value, info.get_type(), info.get_count()),
-            })
+            let name = id
+                .get_name()
+                .map(str::to_owned)
+                .unwrap_or_else(|_| format!("alsa-numid:{numid}"));
+            match (element.info(), element.read()) {
+                (Ok(info), Ok(value)) => Some(Control {
+                    id: control_id(numid),
+                    name,
+                    numid,
+                    value_type: value_type(info.get_type()),
+                    values: observed_values(&value, info.get_type(), info.get_count()),
+                    available: true,
+                }),
+                _ => Some(Control {
+                    id: control_id(numid),
+                    name,
+                    numid,
+                    value_type: ValueType::None,
+                    values: Vec::new(),
+                    available: false,
+                }),
+            }
         })
-        .collect::<Result<Vec<_>, DiscoveryError>>()?;
+        .collect();
 
-    Ok(Discovery { controls })
+    Ok(Discovery {
+        device_id: device_id(card),
+        controls,
+    })
+}
+
+fn device_id(card: &str) -> String {
+    let Ok(control) = Ctl::new(&format!("hw:{card}"), false) else {
+        return format!("alsa-card:{card}");
+    };
+    let Ok(info) = control.card_info() else {
+        return format!("alsa-card:{card}");
+    };
+    let index = info.get_card().get_index();
+    let serial = std::fs::read_to_string(format!("/sys/class/sound/card{index}/device/serial"))
+        .ok()
+        .map(|serial| serial.trim().to_owned())
+        .filter(|serial| !serial.is_empty());
+    let driver = info.get_driver().unwrap_or("unknown");
+    let id = info.get_id().unwrap_or("unknown");
+    match serial {
+        Some(serial) => format!("alsa-usb:{driver}:{id}:{serial}"),
+        None => format!("alsa-card:{driver}:{id}"),
+    }
 }
 
 fn control_id(numid: u32) -> ControlId {
     ControlId(format!("alsa-numid:{numid}"))
 }
 
-fn snapshot_from(
-    card: &str,
-    discovery: Discovery,
-    writable_controls: &BTreeSet<ControlId>,
-) -> DeviceSnapshot {
+fn snapshot_from(discovery: Discovery, writable_controls: &BTreeSet<ControlId>) -> DeviceSnapshot {
     let mut capabilities = Vec::with_capacity(discovery.controls.len());
     let mut values = std::collections::BTreeMap::new();
+    let capability_schema = schema_fingerprint(&discovery.controls);
     for control in discovery.controls {
         let value = control_value(&control.values);
         capabilities.push(ControlCapability {
             id: control.id.clone(),
+            domain: value_domain(control.value_type, &control.values),
             writable: control.value_type == ValueType::Boolean
                 && control.values.len() == 1
                 && writable_controls.contains(&control.id),
-            available: true,
+            available: control.available,
             minimum: None,
             maximum: None,
         });
         values.insert(control.id, value);
     }
     DeviceSnapshot {
-        device_id: format!("alsa-card:{card}"),
-        capability_schema: "scarlett2-alsa-v1".into(),
+        device_id: discovery.device_id,
+        capability_schema,
         capabilities,
         values,
     }
+}
+
+fn value_domain(value_type: ValueType, values: &[ObservedValue]) -> ValueDomain {
+    match value_type {
+        ValueType::Boolean => ValueDomain::Boolean,
+        ValueType::Integer => ValueDomain::Integer,
+        ValueType::Integer64 => ValueDomain::Integer64,
+        ValueType::Enumerated => ValueDomain::Enumerated(
+            values
+                .iter()
+                .filter_map(|value| match value {
+                    ObservedValue::Enumerated(value) => i32::try_from(*value).ok(),
+                    _ => None,
+                })
+                .collect(),
+        ),
+        ValueType::Bytes | ValueType::Iec958 | ValueType::None => ValueDomain::Array,
+    }
+}
+
+fn schema_fingerprint(controls: &[Control]) -> String {
+    let mut hash = 0xcbf29ce484222325u64;
+    for control in controls {
+        for byte in format!(
+            "{}:{:?}:{}:{};",
+            control.id.0,
+            control.value_type,
+            control.available,
+            control.values.len()
+        )
+        .bytes()
+        {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100000001b3);
+        }
+    }
+    format!("scarlett2-alsa-{hash:016x}")
 }
 
 fn write_boolean(card: &str, control: &ControlId, value: bool) -> Result<(), DeviceError> {
@@ -252,14 +318,15 @@ mod tests {
     #[test]
     fn snapshots_are_read_only() {
         let snapshot = snapshot_from(
-            "Solo",
             Discovery {
+                device_id: "mock-device".into(),
                 controls: vec![Control {
                     id: control_id(48),
                     name: "Direct Monitor Playback Switch".into(),
                     numid: 48,
                     value_type: ValueType::Boolean,
                     values: vec![ObservedValue::Boolean(false)],
+                    available: true,
                 }],
             },
             &BTreeSet::new(),
@@ -273,19 +340,36 @@ mod tests {
     fn approved_boolean_control_is_writable() {
         let control = control_id(48);
         let snapshot = snapshot_from(
-            "Solo",
             Discovery {
+                device_id: "mock-device".into(),
                 controls: vec![Control {
                     id: control.clone(),
                     name: "Direct Monitor Playback Switch".into(),
                     numid: 48,
                     value_type: ValueType::Boolean,
                     values: vec![ObservedValue::Boolean(false)],
+                    available: true,
                 }],
             },
             &BTreeSet::from([control]),
         );
 
         assert!(snapshot.capabilities[0].writable);
+    }
+
+    #[test]
+    fn schema_fingerprint_changes_with_capabilities() {
+        let mut controls = vec![Control {
+            id: control_id(48),
+            name: "Direct Monitor Playback Switch".into(),
+            numid: 48,
+            value_type: ValueType::Boolean,
+            values: vec![ObservedValue::Boolean(false)],
+            available: true,
+        }];
+        let original = schema_fingerprint(&controls);
+        controls[0].available = false;
+
+        assert_ne!(original, schema_fingerprint(&controls));
     }
 }
