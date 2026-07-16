@@ -16,7 +16,8 @@ USB/IP detach/re-attach recovery also passed: offline state advanced its
 revision, then recovery resnapshotted the Solo. This validates WSL2 device loss
 and recovery only; it does not replace later physical unplug evidence.
 
-Next: add daemon startup/configuration around atomic disk-backed profiles.
+Profile startup uses service-owned `/var/lib/focusrited/profiles` by default;
+`--profile-store PATH` overrides it. Loading never applies hardware state.
 Profiles bind to adapter-provided device identity and capability-schema version;
 they reject mismatches before any command. Local IPC remains Phase 4 work.
 

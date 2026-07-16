@@ -5,6 +5,7 @@
 
 pub mod profile_store;
 pub mod scarlett2_alsa;
+pub mod startup;
 pub mod worker;
 
 use std::collections::BTreeMap;
