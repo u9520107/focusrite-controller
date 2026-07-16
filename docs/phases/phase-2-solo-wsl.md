@@ -14,7 +14,8 @@ external front-panel Direct Monitor state change is reconciled through WSL2
 without a daemon write.
 USB/IP detach/re-attach recovery also passed: offline state advanced its
 revision, then recovery resnapshotted the Solo. This validates WSL2 device loss
-and recovery only; it does not replace later physical unplug evidence.
+and recovery only. Physical unplug/replug validation is deferred until native
+Linux development hardware or Pi validation is available.
 
 Profile startup uses service-owned `/var/lib/focusrited/profiles` by default;
 `--profile-store PATH` overrides it. Loading never applies hardware state.
@@ -48,12 +49,13 @@ directly to WSL2. This is development evidence, not Pi compatibility proof.
 
 ## Exit checks
 
-- [ ] Mock tests cover writes, failures, disconnect/reconnect, and persistence.
+- [x] Mock tests cover writes, failures, disconnect/reconnect, and persistence.
 - [x] Sanitized Solo discovery fixture records supported controls.
 - [x] Solo external-control reconciliation is verified through WSL2 without a
   daemon write.
 - [x] Solo USB/IP disconnect/reconnect is verified through WSL2 without a
   daemon write.
+- [ ] Physical Solo unplug/replug is deferred to native Linux or Pi validation.
 - [ ] Pi and 16i16 work remain deferred to Phases 3 and 7.
 
 ## Update rule
