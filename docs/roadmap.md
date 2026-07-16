@@ -32,6 +32,10 @@ reconnect, validation, and explicit profile persistence. Validate Solo controls
 and external/front-panel changes through WSL2, while treating it as development
 evidence only.
 
+Phase 2 owns profile storage, device/schema binding, and bounded adapter write
+validation. It does not add user-facing save/list/dry-run/apply operations or
+general multi-control hardware application.
+
 Exit: mock and Solo-on-WSL tests cover supported control behavior, failure,
 disconnect/reconnect, and persistence; unsupported controls are explicit.
 
@@ -50,7 +54,8 @@ deployment prerequisites are recorded.
 Implement versioned Unix-socket snapshot, command, and event messages, then
 build fullscreen Rust touch UI using only that local API. Start with main
 monitor/output controls; add capability groups after hardware and screen-fit
-validation.
+validation. Add local profile save/list, binding/diff dry-run, reviewed apply,
+and per-control applied/skipped/failed results.
 
 Exit: hardware controller works from Pi display; touchscreen-client crash does
 not affect daemon; mock IPC tests cover command ordering, reconnect, and
@@ -76,7 +81,8 @@ designated main volume and mute controls. Establish the web toolchain here:
 pin Node through `.nvmrc`/fnm and pnpm through Corepack, then add a verified
 Fict release with Vite static builds, compatible TypeScript, Biome, and Vitest.
 `focusrited` serves the resulting static assets; Vite is not a production
-server dependency.
+server dependency. Extend profile operations to LAN clients using normal
+idempotency and confirmation rules.
 
 Exit: phone browser controls hardware on accepted LAN security model; two mock
 clients converge after concurrent updates, restart/resync, revision gap, and
