@@ -72,7 +72,7 @@ impl Scarlett2Alsa {
 impl Device for Scarlett2Alsa {
     fn snapshot(&mut self) -> Result<DeviceSnapshot, DeviceError> {
         discover(&self.card)
-            .map(snapshot_from)
+            .map(|discovery| snapshot_from(&self.card, discovery))
             .map_err(|_| DeviceError::Offline)
     }
 
@@ -123,7 +123,7 @@ fn control_id(numid: u32) -> ControlId {
     ControlId(format!("alsa-numid:{numid}"))
 }
 
-fn snapshot_from(discovery: Discovery) -> DeviceSnapshot {
+fn snapshot_from(card: &str, discovery: Discovery) -> DeviceSnapshot {
     let mut capabilities = Vec::with_capacity(discovery.controls.len());
     let mut values = std::collections::BTreeMap::new();
     for control in discovery.controls {
@@ -139,6 +139,8 @@ fn snapshot_from(discovery: Discovery) -> DeviceSnapshot {
         values.insert(control.id, value);
     }
     DeviceSnapshot {
+        device_id: format!("alsa-card:{card}"),
+        capability_schema: "scarlett2-alsa-v1".into(),
         capabilities,
         values,
     }
@@ -199,15 +201,18 @@ mod tests {
 
     #[test]
     fn snapshots_are_read_only() {
-        let snapshot = snapshot_from(Discovery {
-            controls: vec![Control {
-                id: control_id(48),
-                name: "Direct Monitor Playback Switch".into(),
-                numid: 48,
-                value_type: ValueType::Boolean,
-                values: vec![ObservedValue::Boolean(false)],
-            }],
-        });
+        let snapshot = snapshot_from(
+            "Solo",
+            Discovery {
+                controls: vec![Control {
+                    id: control_id(48),
+                    name: "Direct Monitor Playback Switch".into(),
+                    numid: 48,
+                    value_type: ValueType::Boolean,
+                    values: vec![ObservedValue::Boolean(false)],
+                }],
+            },
+        );
 
         assert!(!snapshot.capabilities[0].writable);
         assert_eq!(snapshot.values[&control_id(48)], Value::Bool(false));

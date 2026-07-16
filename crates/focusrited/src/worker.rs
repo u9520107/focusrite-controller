@@ -182,6 +182,8 @@ mod tests {
     fn serial_worker_confirms_command_before_returning_state() {
         let volume = ControlId("output.volume".into());
         let worker = DeviceWorker::start(MockDevice(DeviceSnapshot {
+            device_id: "mock-device".into(),
+            capability_schema: "mock-v1".into(),
             capabilities: vec![ControlCapability {
                 id: volume.clone(),
                 writable: true,

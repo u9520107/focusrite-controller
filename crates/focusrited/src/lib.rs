@@ -31,7 +31,18 @@ pub struct ControlCapability {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeviceSnapshot {
+    /// Opaque adapter-provided identity. Profiles never cross this boundary.
+    pub device_id: String,
+    /// Adapter capability contract used to interpret profile control IDs.
+    pub capability_schema: String,
     pub capabilities: Vec<ControlCapability>,
+    pub values: BTreeMap<ControlId, Value>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Profile {
+    pub device_id: String,
+    pub capability_schema: String,
     pub values: BTreeMap<ControlId, Value>,
 }
 
@@ -57,6 +68,7 @@ pub enum ServiceError {
     ReadOnly,
     InvalidValue,
     UnknownProfile,
+    ProfileBindingMismatch,
 }
 
 pub struct Service<D> {
@@ -64,7 +76,7 @@ pub struct Service<D> {
     snapshot: DeviceSnapshot,
     online: bool,
     revision: u64,
-    profiles: BTreeMap<String, BTreeMap<ControlId, Value>>,
+    profiles: BTreeMap<String, Profile>,
 }
 
 impl<D: Device> Service<D> {
@@ -162,27 +174,39 @@ impl<D: Device> Service<D> {
                     .map(|value| (capability.id.clone(), value.clone()))
             })
             .collect();
-        self.profiles.insert(name, values);
+        self.profiles.insert(
+            name,
+            Profile {
+                device_id: self.snapshot.device_id.clone(),
+                capability_schema: self.snapshot.capability_schema.clone(),
+                values,
+            },
+        );
     }
 
-    pub fn profiles(&self) -> &BTreeMap<String, BTreeMap<ControlId, Value>> {
+    pub fn profiles(&self) -> &BTreeMap<String, Profile> {
         &self.profiles
     }
 
     /// Loads stored profiles only. It never applies hardware state.
-    pub fn set_profiles(&mut self, profiles: BTreeMap<String, BTreeMap<ControlId, Value>>) {
+    pub fn set_profiles(&mut self, profiles: BTreeMap<String, Profile>) {
         self.profiles = profiles;
     }
 
     /// Profile writes are ordered by stable control ID. Hardware cannot make a
     /// multi-control apply atomic; later persistence adds reviewed dry-runs.
     pub fn apply_profile(&mut self, name: &str) -> Result<(), ServiceError> {
-        let values = self
+        let profile = self
             .profiles
             .get(name)
             .cloned()
             .ok_or(ServiceError::UnknownProfile)?;
-        for (control, value) in values {
+        if profile.device_id != self.snapshot.device_id
+            || profile.capability_schema != self.snapshot.capability_schema
+        {
+            return Err(ServiceError::ProfileBindingMismatch);
+        }
+        for (control, value) in profile.values {
             self.command(&control, value)?;
         }
         Ok(())
@@ -216,6 +240,8 @@ mod tests {
         let volume = ControlId("output.volume".into());
         MockDevice {
             snapshot: DeviceSnapshot {
+                device_id: "mock-device".into(),
+                capability_schema: "mock-v1".into(),
                 capabilities: vec![ControlCapability {
                     id: volume.clone(),
                     writable: true,
@@ -281,5 +307,23 @@ mod tests {
         service.apply_profile("desk").unwrap();
 
         assert_eq!(service.snapshot().values[&volume], Value::Integer(50));
+    }
+
+    #[test]
+    fn profile_does_not_apply_to_different_device_or_schema() {
+        let mut service = Service::connect(mock()).unwrap();
+        service.save_profile("desk".into());
+        service.snapshot.device_id = "other-device".into();
+
+        assert_eq!(
+            service.apply_profile("desk"),
+            Err(ServiceError::ProfileBindingMismatch)
+        );
+        service.snapshot.device_id = "mock-device".into();
+        service.snapshot.capability_schema = "mock-v2".into();
+        assert_eq!(
+            service.apply_profile("desk"),
+            Err(ServiceError::ProfileBindingMismatch)
+        );
     }
 }

@@ -7,11 +7,11 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{ControlId, Device, Service, Value};
+use crate::{ControlId, Device, Profile, Service, Value};
 
-const HEADER: &str = "focusrited-profiles-v1";
+const HEADER: &str = "focusrited-profiles-v2";
 
-pub type Profiles = BTreeMap<String, BTreeMap<ControlId, Value>>;
+pub type Profiles = BTreeMap<String, Profile>;
 
 pub struct ProfileStore {
     path: PathBuf,
@@ -57,11 +57,17 @@ impl ProfileStore {
 
 fn encode(profiles: &Profiles) -> String {
     let mut output = format!("{HEADER}\n");
-    for (name, controls) in profiles {
+    for (name, profile) in profiles {
         output.push_str("P ");
         output.push_str(&hex(name.as_bytes()));
         output.push('\n');
-        for (control, value) in controls {
+        output.push_str("D ");
+        output.push_str(&hex(profile.device_id.as_bytes()));
+        output.push('\n');
+        output.push_str("S ");
+        output.push_str(&hex(profile.capability_schema.as_bytes()));
+        output.push('\n');
+        for (control, value) in &profile.values {
             output.push_str("C ");
             output.push_str(&hex(control.0.as_bytes()));
             output.push(' ');
@@ -99,12 +105,38 @@ fn parse(contents: &str) -> io::Result<Profiles> {
                 if current.is_some() || fields.clone().count() != 1 {
                     return invalid("invalid profile header");
                 }
-                current = Some(unhex(fields.next().expect("one field"))?);
+                current = Some((
+                    unhex(fields.next().expect("one field"))?,
+                    None,
+                    None,
+                    BTreeMap::new(),
+                ));
+            }
+            Some("D") => {
+                let Some((_, device_id, _, _)) = current.as_mut() else {
+                    return invalid("device outside profile");
+                };
+                if device_id.is_some() || fields.clone().count() != 1 {
+                    return invalid("invalid device binding");
+                }
+                *device_id = Some(unhex(fields.next().expect("one field"))?);
+            }
+            Some("S") => {
+                let Some((_, _, schema, _)) = current.as_mut() else {
+                    return invalid("schema outside profile");
+                };
+                if schema.is_some() || fields.clone().count() != 1 {
+                    return invalid("invalid schema binding");
+                }
+                *schema = Some(unhex(fields.next().expect("one field"))?);
             }
             Some("C") => {
-                let Some(name) = current.as_ref() else {
+                let Some((_, device_id, schema, values)) = current.as_mut() else {
                     return invalid("control outside profile");
                 };
+                if device_id.is_none() || schema.is_none() {
+                    return invalid("control before profile binding");
+                }
                 let control = fields
                     .next()
                     .ok_or_else(|| invalid_error("missing control id"))?;
@@ -112,16 +144,21 @@ fn parse(contents: &str) -> io::Result<Profiles> {
                 if fields.next().is_some() {
                     return invalid("unexpected control data");
                 }
-                profiles
-                    .entry(name.clone())
-                    .or_default()
-                    .insert(ControlId(unhex(control)?), value);
+                values.insert(ControlId(unhex(control)?), value);
             }
             Some("E") if fields.next().is_none() => {
-                let Some(name) = current.take() else {
+                let Some((name, Some(device_id), Some(capability_schema), values)) = current.take()
+                else {
                     return invalid("profile end without profile");
                 };
-                profiles.entry(name).or_default();
+                profiles.insert(
+                    name,
+                    Profile {
+                        device_id,
+                        capability_schema,
+                        values,
+                    },
+                );
             }
             _ => return invalid("invalid profile record"),
         }
@@ -203,10 +240,14 @@ mod tests {
         let store = ProfileStore::new(&path);
         let profiles = BTreeMap::from([(
             "desk\nprofile".into(),
-            BTreeMap::from([
-                (ControlId("output.mute".into()), Value::Bool(false)),
-                (ControlId("output.level".into()), Value::Integer(75)),
-            ]),
+            Profile {
+                device_id: "mock-device".into(),
+                capability_schema: "mock-v1".into(),
+                values: BTreeMap::from([
+                    (ControlId("output.mute".into()), Value::Bool(false)),
+                    (ControlId("output.level".into()), Value::Integer(75)),
+                ]),
+            },
         )]);
 
         store.save(&profiles).unwrap();
@@ -237,6 +278,8 @@ mod tests {
     fn service(value: i32) -> Service<MockDevice> {
         let control = ControlId("output.level".into());
         Service::connect(MockDevice(DeviceSnapshot {
+            device_id: "mock-device".into(),
+            capability_schema: "mock-v1".into(),
             capabilities: vec![ControlCapability {
                 id: control.clone(),
                 writable: true,
