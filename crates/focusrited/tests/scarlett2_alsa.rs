@@ -1,5 +1,7 @@
+use std::collections::BTreeSet;
+
 use focusrited::{
-    ControlId, DeviceError, ServiceError, Value,
+    ControlId, Device, DeviceError, ServiceError, Value,
     scarlett2_alsa::{Scarlett2Alsa, ValueType, discover},
     worker::{DeviceWorker, WorkerError},
 };
@@ -112,4 +114,34 @@ fn reconnects_after_usbip_detach() {
 
     worker.stop().unwrap();
     panic!("did not observe both USB/IP detach and reconnect within 60 seconds");
+}
+
+#[test]
+#[ignore = "requires explicit approval; toggles Direct Monitor once and restores it"]
+fn toggles_direct_monitor_and_restores_it() {
+    let control = discover("0")
+        .unwrap()
+        .controls
+        .into_iter()
+        .find(|control| control.name == "Direct Monitor Playback Switch")
+        .expect("attached Solo must expose Direct Monitor Playback Switch");
+    assert_eq!(control.value_type, ValueType::Boolean);
+    assert_eq!(control.values.len(), 1);
+    let id = control.id;
+    let before = match control.values[0] {
+        focusrited::scarlett2_alsa::ObservedValue::Boolean(value) => value,
+        _ => unreachable!("Direct Monitor must be boolean"),
+    };
+    let mut device = Scarlett2Alsa::with_writable_controls("0", BTreeSet::from([id.clone()]));
+    let target = !before;
+
+    let changed = device.write(&id, Value::Bool(target));
+    let after_change = device.snapshot();
+    let restored = device.write(&id, Value::Bool(before));
+    let after_restore = device.snapshot();
+
+    assert!(changed.is_ok(), "change failed: {changed:?}");
+    assert_eq!(after_change.unwrap().values[&id], Value::Bool(target));
+    assert!(restored.is_ok(), "restore failed: {restored:?}");
+    assert_eq!(after_restore.unwrap().values[&id], Value::Bool(before));
 }

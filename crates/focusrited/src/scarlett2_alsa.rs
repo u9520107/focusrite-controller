@@ -1,7 +1,9 @@
-//! Read-only ALSA control discovery for Scarlett2-family devices.
+//! ALSA control discovery for Scarlett2-family devices.
 //!
-//! This module intentionally has no write API. Hardware mutation is added only
-//! after explicit approval and device-specific validation.
+//! Instances stay read-only unless constructed with an explicitly approved
+//! discovered boolean control for a bounded hardware test.
+
+use std::collections::BTreeSet;
 
 use alsa::{
     ctl::{ElemType, ElemValue},
@@ -57,27 +59,46 @@ impl std::fmt::Display for DiscoveryError {
 
 impl std::error::Error for DiscoveryError {}
 
-/// Read-only device adapter. It can reconcile current hardware state but never
-/// mutates a control.
 pub struct Scarlett2Alsa {
     card: String,
+    writable_controls: BTreeSet<ControlId>,
 }
 
 impl Scarlett2Alsa {
     pub fn new(card: impl Into<String>) -> Self {
-        Self { card: card.into() }
+        Self {
+            card: card.into(),
+            writable_controls: BTreeSet::new(),
+        }
+    }
+
+    /// Enables only specified discovered boolean controls.
+    pub fn with_writable_controls(
+        card: impl Into<String>,
+        writable_controls: BTreeSet<ControlId>,
+    ) -> Self {
+        Self {
+            card: card.into(),
+            writable_controls,
+        }
     }
 }
 
 impl Device for Scarlett2Alsa {
     fn snapshot(&mut self) -> Result<DeviceSnapshot, DeviceError> {
         discover(&self.card)
-            .map(|discovery| snapshot_from(&self.card, discovery))
+            .map(|discovery| snapshot_from(&self.card, discovery, &self.writable_controls))
             .map_err(|_| DeviceError::Offline)
     }
 
-    fn write(&mut self, _: &ControlId, _: Value) -> Result<(), DeviceError> {
-        Err(DeviceError::WriteDisabled)
+    fn write(&mut self, control: &ControlId, value: Value) -> Result<(), DeviceError> {
+        if !self.writable_controls.contains(control) {
+            return Err(DeviceError::WriteDisabled);
+        }
+        let Value::Bool(value) = value else {
+            return Err(DeviceError::WriteDisabled);
+        };
+        write_boolean(&self.card, control, value)
     }
 }
 
@@ -123,15 +144,20 @@ fn control_id(numid: u32) -> ControlId {
     ControlId(format!("alsa-numid:{numid}"))
 }
 
-fn snapshot_from(card: &str, discovery: Discovery) -> DeviceSnapshot {
+fn snapshot_from(
+    card: &str,
+    discovery: Discovery,
+    writable_controls: &BTreeSet<ControlId>,
+) -> DeviceSnapshot {
     let mut capabilities = Vec::with_capacity(discovery.controls.len());
     let mut values = std::collections::BTreeMap::new();
     for control in discovery.controls {
         let value = control_value(&control.values);
         capabilities.push(ControlCapability {
             id: control.id.clone(),
-            // Read-only mode is deliberate until hardware writes are approved.
-            writable: false,
+            writable: control.value_type == ValueType::Boolean
+                && control.values.len() == 1
+                && writable_controls.contains(&control.id),
             available: true,
             minimum: None,
             maximum: None,
@@ -144,6 +170,30 @@ fn snapshot_from(card: &str, discovery: Discovery) -> DeviceSnapshot {
         capabilities,
         values,
     }
+}
+
+fn write_boolean(card: &str, control: &ControlId, value: bool) -> Result<(), DeviceError> {
+    let numid = control
+        .0
+        .strip_prefix("alsa-numid:")
+        .and_then(|number| number.parse().ok())
+        .ok_or(DeviceError::WriteDisabled)?;
+    let hctl = HCtl::new(&format!("hw:{card}"), false).map_err(|_| DeviceError::Offline)?;
+    hctl.load().map_err(|_| DeviceError::Offline)?;
+    let element = hctl
+        .elem_iter()
+        .find(|element| element.get_id().is_ok_and(|id| id.get_numid() == numid))
+        .ok_or(DeviceError::WriteDisabled)?;
+    let info = element.info().map_err(|_| DeviceError::Failed)?;
+    if info.get_type() != ElemType::Boolean || info.get_count() != 1 {
+        return Err(DeviceError::WriteDisabled);
+    }
+    let mut current = element.read().map_err(|_| DeviceError::Failed)?;
+    current
+        .set_boolean(0, value)
+        .ok_or(DeviceError::WriteDisabled)?;
+    element.write(&current).map_err(|_| DeviceError::Failed)?;
+    Ok(())
 }
 
 fn control_value(values: &[ObservedValue]) -> Value {
@@ -212,9 +262,30 @@ mod tests {
                     values: vec![ObservedValue::Boolean(false)],
                 }],
             },
+            &BTreeSet::new(),
         );
 
         assert!(!snapshot.capabilities[0].writable);
         assert_eq!(snapshot.values[&control_id(48)], Value::Bool(false));
+    }
+
+    #[test]
+    fn approved_boolean_control_is_writable() {
+        let control = control_id(48);
+        let snapshot = snapshot_from(
+            "Solo",
+            Discovery {
+                controls: vec![Control {
+                    id: control.clone(),
+                    name: "Direct Monitor Playback Switch".into(),
+                    numid: 48,
+                    value_type: ValueType::Boolean,
+                    values: vec![ObservedValue::Boolean(false)],
+                }],
+            },
+            &BTreeSet::from([control]),
+        );
+
+        assert!(snapshot.capabilities[0].writable);
     }
 }

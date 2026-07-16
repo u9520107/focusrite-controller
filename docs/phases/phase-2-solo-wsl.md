@@ -26,6 +26,9 @@ by `/proc/asound` but no `/dev/snd` nodes. USB/IP/WSL device nodes were restored
 without a daemon write.
 Device nodes were restored and read-only `focusrited --card 0` ran against the
 attached Solo on 2026-07-15 until Ctrl-C, with no daemon output or write.
+With explicit approval, one bounded Direct Monitor test discovered its boolean
+ALSA control, wrote its opposite value, confirmed it, restored original value,
+and confirmed restoration on 2026-07-15. No other control was written.
 Profiles bind to adapter-provided device identity and capability-schema version;
 they reject mismatches before any command. Local IPC remains Phase 4 work.
 
