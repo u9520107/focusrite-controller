@@ -1,0 +1,115 @@
+use focusrited::{
+    ControlId, DeviceError, ServiceError, Value,
+    scarlett2_alsa::{Scarlett2Alsa, ValueType, discover},
+    worker::{DeviceWorker, WorkerError},
+};
+
+#[test]
+fn fixture_records_solo_controls() {
+    let fixture = include_str!("fixtures/scarlett-solo-4th-gen.md");
+
+    assert!(fixture.contains("Direct Monitor Playback Switch"));
+    assert!(fixture.contains("0–184"));
+}
+
+#[test]
+#[ignore = "requires an attached Scarlett Solo ALSA card"]
+fn discovers_attached_solo() {
+    let discovery = discover("0").unwrap();
+
+    assert!(discovery.controls.len() >= 56);
+    assert!(discovery.controls.iter().any(|control| {
+        control.name == "Level Meter" && control.value_type == ValueType::Integer
+    }));
+
+    let worker = DeviceWorker::start(Scarlett2Alsa::new("0")).unwrap();
+    let snapshot = worker.state().unwrap().snapshot;
+    assert_eq!(snapshot.capabilities.len(), discovery.controls.len());
+    assert!(
+        snapshot
+            .capabilities
+            .iter()
+            .all(|control| !control.writable)
+    );
+
+    assert_eq!(
+        worker.command(
+            ControlId("alsa-numid:48".into()),
+            focusrited::Value::Bool(true)
+        ),
+        Err(focusrited::worker::WorkerError::Service(
+            focusrited::ServiceError::ReadOnly
+        ))
+    );
+    assert_eq!(worker.state().unwrap().revision, 1);
+    worker.stop().unwrap();
+}
+
+#[test]
+#[ignore = "toggle the Solo Direct Monitor control during this 30-second read-only check"]
+fn reconciles_external_direct_monitor_change() {
+    let control = ControlId("alsa-numid:48".into());
+    let worker = DeviceWorker::start(Scarlett2Alsa::new("0")).unwrap();
+    let before = worker.state().unwrap();
+    let previous = before.snapshot.values[&control].clone();
+    println!("Direct Monitor before: {previous:?}. Toggle Direct now.");
+
+    for _ in 0..120 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let current = worker.refresh().unwrap();
+        if current.snapshot.values[&control] != previous {
+            println!(
+                "Direct Monitor after: {:?}; revision {} to {}.",
+                current.snapshot.values[&control], before.revision, current.revision
+            );
+            assert!(current.revision > before.revision);
+            assert!(matches!(current.snapshot.values[&control], Value::Bool(_)));
+            worker.stop().unwrap();
+            return;
+        }
+    }
+
+    let after = worker.state().unwrap();
+    worker.stop().unwrap();
+    panic!(
+        "Direct Monitor did not change within 30 seconds: before {previous:?}, after {:?}",
+        after.snapshot.values[&control]
+    );
+}
+
+#[test]
+#[ignore = "detach then re-attach the Solo with usbipd during this 60-second read-only check"]
+fn reconnects_after_usbip_detach() {
+    let worker = DeviceWorker::start(Scarlett2Alsa::new("0")).unwrap();
+    let initial = worker.state().unwrap();
+    let mut saw_offline = false;
+    println!("Detach Solo with usbipd now, then attach it again.");
+
+    for _ in 0..240 {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        match worker.refresh() {
+            Ok(state) if saw_offline && state.online => {
+                println!(
+                    "Solo reconnected; revision {} to {}.",
+                    initial.revision, state.revision
+                );
+                assert!(state.revision > initial.revision);
+                worker.stop().unwrap();
+                return;
+            }
+            Ok(_) => {}
+            Err(WorkerError::Service(ServiceError::Device(DeviceError::Offline))) => {
+                if !saw_offline {
+                    let offline = worker.state().unwrap();
+                    println!("Solo offline at revision {}.", offline.revision);
+                    assert!(!offline.online);
+                    saw_offline = true;
+                }
+            }
+            Err(error) => panic!("unexpected worker error: {error:?}"),
+        }
+    }
+
+    worker.stop().unwrap();
+    panic!("did not observe both USB/IP detach and reconnect within 60 seconds");
+}
