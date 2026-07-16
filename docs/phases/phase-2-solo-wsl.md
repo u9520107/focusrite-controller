@@ -18,7 +18,12 @@ and recovery only. Physical unplug/replug validation is deferred until native
 Linux development hardware or Pi validation is available.
 
 Profile startup uses service-owned `/var/lib/focusrited/profiles` by default;
-`--profile-store PATH` overrides it. Loading never applies hardware state.
+`--profile-store PATH` overrides it. Read-only daemon startup requires
+`--card CARD`, and polls state reconciliation through serial device worker.
+Loading never applies hardware state.
+Current WSL session has Solo listed by `/proc/asound` but no `/dev/snd` nodes,
+so executable startup validation is blocked until USB/IP/WSL device nodes are
+restored. No daemon write occurred.
 Profiles bind to adapter-provided device identity and capability-schema version;
 they reject mismatches before any command. Local IPC remains Phase 4 work.
 

@@ -2,18 +2,23 @@
 
 use std::{io, path::PathBuf};
 
-use crate::{Device, Service, ServiceError, profile_store::ProfileStore};
+use crate::{
+    Device, Service, ServiceError,
+    profile_store::{ProfileStore, Profiles},
+};
 
 pub const DEFAULT_PROFILE_STORE_PATH: &str = "/var/lib/focusrited/profiles";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
+    pub card: Option<String>,
     pub profile_store_path: PathBuf,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
+            card: None,
             profile_store_path: DEFAULT_PROFILE_STORE_PATH.into(),
         }
     }
@@ -26,6 +31,9 @@ impl Config {
         let mut arguments = arguments.into_iter();
         while let Some(argument) = arguments.next() {
             match argument.as_str() {
+                "--card" => {
+                    config.card = Some(arguments.next().ok_or(ConfigError::MissingCard)?);
+                }
                 "--profile-store" => {
                     config.profile_store_path = arguments
                         .next()
@@ -43,6 +51,7 @@ impl Config {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ConfigError {
     Help,
+    MissingCard,
     MissingProfileStorePath,
     UnknownArgument(String),
 }
@@ -50,7 +59,10 @@ pub enum ConfigError {
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Help => formatter.write_str("usage: focusrited [--profile-store PATH]"),
+            Self::Help => {
+                formatter.write_str("usage: focusrited --card CARD [--profile-store PATH]")
+            }
+            Self::MissingCard => formatter.write_str("--card requires an ALSA card name"),
             Self::MissingProfileStorePath => formatter.write_str("--profile-store requires a path"),
             Self::UnknownArgument(argument) => write!(formatter, "unknown argument: {argument}"),
         }
@@ -79,10 +91,12 @@ impl std::error::Error for StartupError {}
 /// Connects device, then loads stored profiles without applying hardware state.
 pub fn connect<D: Device>(device: D, config: &Config) -> Result<Service<D>, StartupError> {
     let mut service = Service::connect(device).map_err(StartupError::Device)?;
-    ProfileStore::new(&config.profile_store_path)
-        .load_into(&mut service)
-        .map_err(StartupError::ProfileStore)?;
+    service.set_profiles(load_profiles(config).map_err(StartupError::ProfileStore)?);
     Ok(service)
+}
+
+pub fn load_profiles(config: &Config) -> io::Result<Profiles> {
+    ProfileStore::new(&config.profile_store_path).load()
 }
 
 #[cfg(test)]
@@ -98,12 +112,15 @@ mod tests {
             Config::from_args([]).unwrap().profile_store_path,
             PathBuf::from(DEFAULT_PROFILE_STORE_PATH)
         );
-        assert_eq!(
-            Config::from_args(["--profile-store".into(), "/tmp/profiles".into()])
-                .unwrap()
-                .profile_store_path,
-            PathBuf::from("/tmp/profiles")
-        );
+        let config = Config::from_args([
+            "--card".into(),
+            "Solo".into(),
+            "--profile-store".into(),
+            "/tmp/profiles".into(),
+        ])
+        .unwrap();
+        assert_eq!(config.card.as_deref(), Some("Solo"));
+        assert_eq!(config.profile_store_path, PathBuf::from("/tmp/profiles"));
     }
 
     struct MockDevice(DeviceSnapshot);
@@ -140,6 +157,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("focusrited-startup-test-{}", std::process::id()));
         let config = Config {
+            card: None,
             profile_store_path: path.clone(),
         };
         let store = ProfileStore::new(&path);

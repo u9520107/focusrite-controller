@@ -8,7 +8,9 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use crate::{ControlId, Device, DeviceSnapshot, Service, ServiceError, Value};
+use crate::{
+    ControlId, Device, DeviceSnapshot, Service, ServiceError, Value, profile_store::Profiles,
+};
 
 const QUEUE_LIMIT: usize = 32;
 
@@ -55,10 +57,19 @@ enum Request {
 impl DeviceWorker {
     /// Starts one bounded queue and one serial device-owning thread.
     pub fn start<D: Device + Send + 'static>(device: D) -> Result<Self, WorkerError> {
+        Self::start_with_profiles(device, Profiles::new())
+    }
+
+    /// Starts with stored profiles. Loading profiles never applies a write.
+    pub fn start_with_profiles<D: Device + Send + 'static>(
+        device: D,
+        profiles: Profiles,
+    ) -> Result<Self, WorkerError> {
         let (sender, receiver) = sync_channel(QUEUE_LIMIT);
         let (ready_sender, ready_receiver) = sync_channel(1);
         let thread = thread::spawn(move || match Service::connect(device) {
-            Ok(service) => {
+            Ok(mut service) => {
+                service.set_profiles(profiles);
                 let _ = ready_sender.send(Ok(()));
                 run(service, receiver);
             }
