@@ -3,8 +3,9 @@
 ## Prerequisites
 
 - Native Linux with a C toolchain (`cc`) for Rust crates that compile native
-  code. Raspberry Pi OS accessed over SSH is the primary development target;
-  Zed Remote Development builds and runs code on the Pi.
+  code. Raspberry Pi OS local sessions are the primary development target.
+  SSH and Zed Remote Development are optional; when used, builds and hardware
+  commands still run on the Pi.
 - [rustup](https://rustup.rs/). The committed `rust-toolchain.toml` installs the
   selected compiler, Clippy, and rustfmt.
 
@@ -43,19 +44,31 @@ install `usbutils` and `alsa-utils`.
 rustup show
 ```
 
-## Develop on the Pi over SSH
+## Develop directly on the Pi
 
-Clone the repository on the Pi under the SSH development user. Open that clone
-through Zed Remote Development; editor, Cargo, and hardware commands then run
-natively on the Pi. This is preferred even when editing from another laptop,
-because it validates the actual target architecture and ALSA environment.
+Work in the repository from a local Pi session. Editor, Cargo, and hardware
+commands run natively on the Pi, validating target architecture and ALSA.
+SSH/Zed Remote Development may access that same checkout when convenient, but
+is not required.
 
 Before connecting hardware, run the checks in [Checks](#checks). If ALSA access
-is needed, add the SSH user to the `audio` group, then reconnect the SSH session:
+is needed, add the current local user to the `audio` group, then start a new
+login session:
 
 ```sh
 sudo usermod -aG audio <user>
 ```
+
+Before hardware probes, confirm the new session has both ALSA device nodes and
+effective group membership:
+
+```sh
+test -d /dev/snd
+id -nG
+```
+
+Do not use `sudo` to mask a missing `/dev/snd` directory or inactive `audio`
+membership; fix local device-node/session access first.
 
 Do not run control writes, routing/clock changes, firmware updates, resets, or
 profile application without explicit approval.

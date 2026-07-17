@@ -2,9 +2,9 @@
 
 ## Status
 
-In progress. MR 1 complete; MR 2 is next. Target is prepared Pi OS ARM64 with
-Scarlett Solo 4th Gen connected directly by USB. Phase 2 WSL evidence remains
-valid only for its WSL scope.
+In progress. MR 1 and MR 2 complete; MR 3 is next. Target is prepared Pi OS
+ARM64 with Scarlett Solo 4th Gen connected directly by USB. Phase 2 WSL
+evidence remains valid only for its WSL scope.
 
 ## Goal
 
@@ -89,6 +89,84 @@ FOCUSRITED_HARDWARE_CARD=Gen cargo test -p focusrited --test scarlett2_alsa \
 
 Read-only only. No control write or stored-profile apply.
 
+**Execution plan**
+
+1. On the prepared Pi, confirm the Solo is directly connected and record only
+   bounded, sanitized read-only evidence:
+
+   ```text
+   uname -a
+   lsusb | grep -i focusrite
+   cat /proc/asound/cards
+   arecord -l
+   aplay -l
+   amixer -c CURRENT_CARD_INDEX controls
+   amixer -c CURRENT_CARD_INDEX contents | sed -n '1,400p'
+   ```
+
+   Replace `CURRENT_CARD_INDEX` with the index shown for Solo in the immediately
+   preceding `/proc/asound/cards` output; never assume card 0. Use its named
+   ALSA ID (for example, `Gen`) for `focusrited --card` and hardware-test
+   `FOCUSRITED_HARDWARE_CARD`. Redact serials, usernames, LAN addresses,
+   tokens, and unrelated USB/system data before saving any evidence.
+2. Build and run local checks before touching Pi hardware:
+
+   ```text
+   cargo fmt --check
+   cargo clippy --workspace --all-targets -- -D warnings
+   cargo test --workspace
+   ```
+
+3. Run the ignored read-only discovery test against that explicit card:
+
+   ```text
+   FOCUSRITED_HARDWARE_CARD=CARD cargo test -p focusrited \
+     --test scarlett2_alsa discovers_attached_solo -- --ignored --test-threads=1
+   ```
+
+   Confirm it reports only non-writable capabilities, rejects a command
+   without a hardware write, and exits successfully.
+4. Start daemon with an empty temporary profile-store path, observe successful
+   startup, then stop it without issuing a command:
+
+   ```text
+   profile_dir=$(mktemp -d)
+   profile_store="$profile_dir/profiles"
+   timeout --signal=INT 5s cargo run -p focusrited -- --card CARD \
+     --profile-store "$profile_store"
+   rmdir "$profile_dir"
+   ```
+
+   `timeout` ending this foreground daemon is expected. Treat a startup error,
+   ALSA access error, or an unexpected file left in the temporary profile store
+   as MR2 evidence to investigate.
+5. Compare sanitized Pi controls, types, counts, and availability with
+   `crates/focusrited/tests/fixtures/scarlett-solo-4th-gen.md`. Change fixture
+   or parsing only for a Pi-proven difference; otherwise add a dated evidence
+   summary and Pi prerequisites to the hardware/deployment documentation.
+
+**Evidence — 2026-07-17 (complete)**
+
+- Target reports Debian GNU/Linux 13.6 on `aarch64`, kernel
+  `6.12.62+rpt-rpi-2712`.
+- `/proc/asound/cards` identifies Scarlett Solo 4th Gen as card index 2 with
+  ALSA ID `Gen`. Capture and playback both expose device 0.
+- Direct Pi ALSA access has `/dev/snd` available and effective `audio` group
+  membership. The workspace sandbox intentionally does not mount `/dev/snd`;
+  hardware commands must run from a direct Pi terminal or an approved
+  unsandboxed runner.
+- Bounded `amixer -c 2 controls` and contents report 56 controls. Their IDs,
+  types, access shape, enum domains, and integer ranges match Phase 2 fixture.
+  Current control values were observed only and are not recorded here.
+- `FOCUSRITED_HARDWARE_CARD=Gen` read-only `discovers_attached_solo` passes:
+  all discovered capabilities remain non-writable and service commands are
+  rejected before hardware write.
+- `focusrited --card Gen` starts successfully for five seconds with an empty
+  disposable profile-store path. It receives no command; temporary directory
+  removal confirms no profile file was written.
+- No ALSA control, profile, fixture, or adapter code changed. MR3 may capture
+  metadata and verify an operator-initiated external Direct Monitor change.
+
 ### MR 3: Native reconciliation and controlled write metadata
 
 **Scope**
@@ -153,8 +231,8 @@ Read-only only.
 
 - [x] Read-only and write-capable hardware tests are structurally separated;
   write tests require explicit feature plus session approval.
-- [ ] Solo service builds and starts natively on Pi against selected ALSA card.
-- [ ] Sanitized Pi discovery proves capabilities and documented prerequisites.
+- [x] Solo service builds and starts natively on Pi against selected ALSA card.
+- [x] Sanitized Pi discovery proves capabilities and documented prerequisites.
 - [ ] External/front-panel change reconciles into authoritative service state.
 - [ ] Physical unplug/replug recovers to a fresh online snapshot.
 - [ ] Pi reboot returns daemon and Solo readiness without device-state mutation.
