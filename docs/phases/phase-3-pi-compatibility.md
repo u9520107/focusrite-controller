@@ -2,8 +2,9 @@
 
 ## Status
 
-Planned. Target is prepared Pi OS ARM64 with Scarlett Solo 4th Gen connected
-directly by USB. Phase 2 WSL evidence remains valid only for its WSL scope.
+In progress. MR 1 complete; MR 2 is next. Target is prepared Pi OS ARM64 with
+Scarlett Solo 4th Gen connected directly by USB. Phase 2 WSL evidence remains
+valid only for its WSL scope.
 
 ## Goal
 
@@ -25,7 +26,7 @@ found by that evidence.
 
 ## Merge-request plan
 
-### MR 1: Safe native hardware-test entry points
+### MR 1: Safe native hardware-test entry points — complete
 
 **Scope**
 
@@ -49,11 +50,11 @@ None. Do not run ignored tests in this MR.
 
 **Commands after MR 1**
 
-Pi Solo is currently ALSA card 2. Select it explicitly rather than relying on
-card order:
+Select Solo explicitly with its ALSA card ID rather than relying on card order:
 
 ```text
-FOCUSRITED_HARDWARE_CARD=2 cargo test -p focusrited --test scarlett2_alsa -- --ignored
+FOCUSRITED_HARDWARE_CARD=Gen cargo test -p focusrited --test scarlett2_alsa -- \
+  --ignored --test-threads=1
 ```
 
 That command runs only ignored read-only hardware tests. A write-capable test
@@ -61,8 +62,9 @@ is excluded unless `--features hardware-write-tests` is passed. Even then, run
 only after explicit session approval and filter to the intended test:
 
 ```text
-FOCUSRITED_HARDWARE_CARD=2 cargo test -p focusrited --test scarlett2_alsa \
-  --features hardware-write-tests toggles_direct_monitor_and_restores_it -- --ignored
+FOCUSRITED_HARDWARE_CARD=Gen cargo test -p focusrited --test scarlett2_alsa \
+  --features hardware-write-tests toggles_direct_monitor_and_restores_it -- \
+  --ignored --test-threads=1
 ```
 
 ### MR 2: Pi read-only discovery and capability evidence
@@ -149,7 +151,7 @@ Read-only only.
 
 ## Exit checks
 
-- [ ] Read-only and write-capable hardware tests are structurally separated;
+- [x] Read-only and write-capable hardware tests are structurally separated;
   write tests require explicit feature plus session approval.
 - [ ] Solo service builds and starts natively on Pi against selected ALSA card.
 - [ ] Sanitized Pi discovery proves capabilities and documented prerequisites.

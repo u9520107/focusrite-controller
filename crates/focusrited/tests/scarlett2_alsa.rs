@@ -1,5 +1,6 @@
 #[cfg(feature = "hardware-write-tests")]
 use std::collections::BTreeSet;
+use std::sync::Mutex;
 
 #[cfg(feature = "hardware-write-tests")]
 use focusrited::Device;
@@ -9,8 +10,11 @@ use focusrited::{
     worker::{DeviceWorker, WorkerError},
 };
 
+static HARDWARE_LOCK: Mutex<()> = Mutex::new(());
+
 fn hardware_card() -> String {
-    std::env::var("FOCUSRITED_HARDWARE_CARD").unwrap_or_else(|_| "0".into())
+    std::env::var("FOCUSRITED_HARDWARE_CARD")
+        .expect("FOCUSRITED_HARDWARE_CARD must identify the attached Solo")
 }
 
 #[test]
@@ -24,6 +28,9 @@ fn fixture_records_solo_controls() {
 #[test]
 #[ignore = "requires an attached Scarlett Solo ALSA card"]
 fn discovers_attached_solo() {
+    let _hardware_guard = HARDWARE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let card = hardware_card();
     let discovery = discover(&card).unwrap();
 
@@ -58,6 +65,9 @@ fn discovers_attached_solo() {
 #[test]
 #[ignore = "toggle the Solo Direct Monitor control during this 30-second read-only check"]
 fn reconciles_external_direct_monitor_change() {
+    let _hardware_guard = HARDWARE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let control = ControlId("alsa-numid:48".into());
     let worker = DeviceWorker::start(Scarlett2Alsa::new(hardware_card())).unwrap();
     let before = worker.state().unwrap();
@@ -90,6 +100,9 @@ fn reconciles_external_direct_monitor_change() {
 #[test]
 #[ignore = "disconnect then reconnect the Solo during this 60-second read-only check"]
 fn reconnects_after_solo_disconnect() {
+    let _hardware_guard = HARDWARE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let worker = DeviceWorker::start(Scarlett2Alsa::new(hardware_card())).unwrap();
     let initial = worker.state().unwrap();
     let mut saw_offline = false;
@@ -128,6 +141,9 @@ fn reconnects_after_solo_disconnect() {
 #[test]
 #[ignore = "requires explicit approval; toggles Direct Monitor once and restores it"]
 fn toggles_direct_monitor_and_restores_it() {
+    let _hardware_guard = HARDWARE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let card = hardware_card();
     let control = discover(&card)
         .unwrap()
