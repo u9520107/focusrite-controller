@@ -4,8 +4,9 @@
 
 - Primary appliance: Raspberry Pi 5, 64-bit Linux,
   `aarch64-unknown-linux-gnu`.
-- Primary development target: Raspberry Pi 5 over SSH, commonly through Zed
-  Remote Development.
+- Primary development target: local Raspberry Pi 5 session.
+- SSH and Zed Remote Development are optional remote access paths, not required
+  development workflow.
 - Laptop-local Linux or WSL are optional development environments; neither is a
   deployment target.
 

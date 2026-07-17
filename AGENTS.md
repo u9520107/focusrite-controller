@@ -31,6 +31,7 @@
   each MR states scope, verification, and any hardware action needed.
 - Never edit, commit, or push `main` directly. Work on a dedicated branch and
   merge through a reviewed MR. Do not push any branch unless explicitly asked.
+- Prefer short, descriptive branch names so manual pushes stay easy.
 - Run mock/unit tests before hardware tests.
 - Hardware validation runs on target Linux hardware; QEMU cannot validate USB
   control behavior.
