@@ -2,11 +2,13 @@
 
 ## Prerequisites
 
-- Linux/WSL with a C toolchain (`cc`) for Rust crates that compile native code.
+- Native Linux with a C toolchain (`cc`) for Rust crates that compile native
+  code. Raspberry Pi OS accessed over SSH is the primary development target;
+  Zed Remote Development builds and runs code on the Pi.
 - [rustup](https://rustup.rs/). The committed `rust-toolchain.toml` installs the
   selected compiler, Clippy, and rustfmt.
 
-On Debian/Ubuntu/WSL, install the C toolchain with:
+On Raspberry Pi OS, Debian, or Ubuntu, install the C toolchain with:
 
 ```sh
 sudo apt-get update
@@ -16,7 +18,7 @@ sudo apt-get install -y build-essential
 On Fedora, install `gcc` and `make`.
 
 Phase 2’s direct ALSA adapter also needs development headers and `pkg-config`.
-On Debian/Ubuntu/WSL:
+On Raspberry Pi OS, Debian, or Ubuntu:
 
 ```sh
 sudo apt-get install -y pkg-config libasound2-dev
@@ -24,8 +26,8 @@ sudo apt-get install -y pkg-config libasound2-dev
 
 On Fedora, install `pkgconf-pkg-config` and `alsa-lib-devel`.
 
-Phase 2 read-only hardware discovery also needs command-line tools. On
-Debian/Ubuntu/WSL:
+Hardware discovery also needs command-line tools. On Raspberry Pi OS, Debian,
+or Ubuntu:
 
 ```sh
 sudo apt-get install -y usbutils alsa-utils
@@ -41,11 +43,28 @@ install `usbutils` and `alsa-utils`.
 rustup show
 ```
 
-## Route a Scarlett Solo into WSL2
+## Develop on the Pi over SSH
 
-Do this only when ready for Phase 2 read-only discovery. While attached, the
-Solo is unavailable to Windows applications. This grants WSL direct USB access;
-it does not write device state.
+Clone the repository on the Pi under the SSH development user. Open that clone
+through Zed Remote Development; editor, Cargo, and hardware commands then run
+natively on the Pi. This is preferred even when editing from another laptop,
+because it validates the actual target architecture and ALSA environment.
+
+Before connecting hardware, run the checks in [Checks](#checks). If ALSA access
+is needed, add the SSH user to the `audio` group, then reconnect the SSH session:
+
+```sh
+sudo usermod -aG audio <user>
+```
+
+Do not run control writes, routing/clock changes, firmware updates, resets, or
+profile application without explicit approval.
+
+## Optional: route a Scarlett Solo into WSL2
+
+This was Phase 2 development infrastructure. Use it only when Pi-native access
+is unavailable. While attached, the Solo is unavailable to Windows applications.
+It grants WSL direct USB access; it does not write device state.
 
 1. In an elevated PowerShell window, install/update WSL and `usbipd-win`:
 
@@ -119,5 +138,5 @@ server dependency.
 
 ## Deferred tooling
 
-Pi-native validation and any cross-build toolchain are Phase 3 work. Do not
-install one until that phase identifies a real deployment need.
+Cross-build tooling remains deferred. Native Pi development is the Phase 3
+baseline; do not add a cross-build path until it solves a demonstrated need.

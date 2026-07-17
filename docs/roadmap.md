@@ -44,10 +44,16 @@ disconnect/reconnect, and persistence; unsupported controls are explicit.
 
 ## Phase 3: Pi compatibility verification — planned
 
-Prepare target Pi and validate current Solo service natively on Pi Linux. Find
-and fix target-only build, ALSA, USB, system-service, reboot, and unplug/replug
-issues. Cross-compilation may be introduced only if it helps this validated Pi
-deployment path.
+Develop directly on the Pi over SSH, including Zed Remote Development from a
+laptop, then validate current Solo service natively on Pi Linux. Find and fix
+target-only build, ALSA, USB, system-service, reboot, and unplug/replug issues.
+Cross-compilation may be introduced only if native Pi development demonstrates a
+real need.
+
+Before adding Phase 3 hardware coverage, split Solo tests into a read-only
+hardware suite (discovery, external changes, reconnect) and a write-capable
+suite. Gate the write-capable suite behind an explicit Cargo feature so running
+ignored tests cannot mutate hardware accidentally.
 
 Exit: Solo service runs reliably on prepared Pi; target-specific limits and
 deployment prerequisites are recorded.

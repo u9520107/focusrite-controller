@@ -19,8 +19,9 @@ chosen image provides:
 - installable FCP firmware and `fcp-server`;
 - stable USB power and touchscreen-compatible session.
 
-When 16i16 access is available, first run bounded read-only discovery on a
-directly connected Linux development laptop, then repeat target-Pi validation.
+When 16i16 access is available, run bounded read-only discovery on the target
+Pi where possible. Any initial validation on a separate native Linux host must
+be repeated on the Pi.
 Record sanitized proof that clean install, reboot, and unplug/replug return
 `fcp-server` and required ALSA controls to ready state. This is a Phase 7
 acceptance gate, not a blocker for Phase 1 foundation or Phase 2 Solo/mock work.

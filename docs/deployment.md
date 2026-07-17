@@ -4,17 +4,21 @@
 
 - Primary appliance: Raspberry Pi 5, 64-bit Linux,
   `aarch64-unknown-linux-gnu`.
-- Development host: WSL on `x86_64-unknown-linux-gnu`; not a deployment target.
+- Primary development target: Raspberry Pi 5 over SSH, commonly through Zed
+  Remote Development.
+- Laptop-local Linux or WSL are optional development environments; neither is a
+  deployment target.
 
-WSL is development host. Pi-native validation comes first; choose a cross-build
-path only if that validated deployment needs one.
+Pi-native development and validation come first. Choose a cross-build path only
+if native Pi development demonstrates a real need.
 
 ## Build policy
 
-Implementation will pin Rust, Node, pnpm, and Fict versions. Any Rust
-cross-build uses a pinned container/sysroot or `cargo-zigbuild`; choice is
-deferred to Pi validation. Web assets build on development/CI host; Pi requires
-no Node, Rust compiler, or web build tools for packaged deployment.
+Implementation will pin Rust, Node, pnpm, and Fict versions. Native Pi builds
+are supported for development. Any Rust cross-build uses a pinned
+container/sysroot or `cargo-zigbuild`; choice is deferred to Pi validation. Web
+assets build on development/CI host; packaged Pi deployments require no Node,
+Rust compiler, or web build tools.
 
 ## Packaging
 
