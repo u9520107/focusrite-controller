@@ -26,6 +26,11 @@
 
 ## Engineering workflow
 
+- Start every planned phase with a detailed execution plan in `docs/phases/`.
+- Divide implementation into small, independently reviewable merge requests;
+  each MR states scope, verification, and any hardware action needed.
+- Never edit, commit, or push `main` directly. Work on a dedicated branch and
+  merge through a reviewed MR. Do not push any branch unless explicitly asked.
 - Run mock/unit tests before hardware tests.
 - Hardware validation runs on target Linux hardware; QEMU cannot validate USB
   control behavior.

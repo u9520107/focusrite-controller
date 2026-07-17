@@ -1,10 +1,21 @@
+#[cfg(feature = "hardware-write-tests")]
 use std::collections::BTreeSet;
+use std::sync::Mutex;
 
+#[cfg(feature = "hardware-write-tests")]
+use focusrited::Device;
 use focusrited::{
-    ControlId, Device, DeviceError, ServiceError, Value,
+    ControlId, DeviceError, ServiceError, Value,
     scarlett2_alsa::{Scarlett2Alsa, ValueType, discover},
     worker::{DeviceWorker, WorkerError},
 };
+
+static HARDWARE_LOCK: Mutex<()> = Mutex::new(());
+
+fn hardware_card() -> String {
+    std::env::var("FOCUSRITED_HARDWARE_CARD")
+        .expect("FOCUSRITED_HARDWARE_CARD must identify the attached Solo")
+}
 
 #[test]
 fn fixture_records_solo_controls() {
@@ -17,14 +28,18 @@ fn fixture_records_solo_controls() {
 #[test]
 #[ignore = "requires an attached Scarlett Solo ALSA card"]
 fn discovers_attached_solo() {
-    let discovery = discover("0").unwrap();
+    let _hardware_guard = HARDWARE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let card = hardware_card();
+    let discovery = discover(&card).unwrap();
 
     assert!(discovery.controls.len() >= 56);
     assert!(discovery.controls.iter().any(|control| {
         control.name == "Level Meter" && control.value_type == ValueType::Integer
     }));
 
-    let worker = DeviceWorker::start(Scarlett2Alsa::new("0")).unwrap();
+    let worker = DeviceWorker::start(Scarlett2Alsa::new(card)).unwrap();
     let snapshot = worker.state().unwrap().snapshot;
     assert_eq!(snapshot.capabilities.len(), discovery.controls.len());
     assert!(
@@ -50,8 +65,11 @@ fn discovers_attached_solo() {
 #[test]
 #[ignore = "toggle the Solo Direct Monitor control during this 30-second read-only check"]
 fn reconciles_external_direct_monitor_change() {
+    let _hardware_guard = HARDWARE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let control = ControlId("alsa-numid:48".into());
-    let worker = DeviceWorker::start(Scarlett2Alsa::new("0")).unwrap();
+    let worker = DeviceWorker::start(Scarlett2Alsa::new(hardware_card())).unwrap();
     let before = worker.state().unwrap();
     let previous = before.snapshot.values[&control].clone();
     println!("Direct Monitor before: {previous:?}. Toggle Direct now.");
@@ -80,12 +98,15 @@ fn reconciles_external_direct_monitor_change() {
 }
 
 #[test]
-#[ignore = "detach then re-attach the Solo with usbipd during this 60-second read-only check"]
-fn reconnects_after_usbip_detach() {
-    let worker = DeviceWorker::start(Scarlett2Alsa::new("0")).unwrap();
+#[ignore = "disconnect then reconnect the Solo during this 60-second read-only check"]
+fn reconnects_after_solo_disconnect() {
+    let _hardware_guard = HARDWARE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let worker = DeviceWorker::start(Scarlett2Alsa::new(hardware_card())).unwrap();
     let initial = worker.state().unwrap();
     let mut saw_offline = false;
-    println!("Detach Solo with usbipd now, then attach it again.");
+    println!("Disconnect Solo now, then reconnect it.");
 
     for _ in 0..240 {
         std::thread::sleep(std::time::Duration::from_millis(250));
@@ -113,13 +134,18 @@ fn reconnects_after_usbip_detach() {
     }
 
     worker.stop().unwrap();
-    panic!("did not observe both USB/IP detach and reconnect within 60 seconds");
+    panic!("did not observe both Solo disconnect and reconnect within 60 seconds");
 }
 
+#[cfg(feature = "hardware-write-tests")]
 #[test]
 #[ignore = "requires explicit approval; toggles Direct Monitor once and restores it"]
 fn toggles_direct_monitor_and_restores_it() {
-    let control = discover("0")
+    let _hardware_guard = HARDWARE_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let card = hardware_card();
+    let control = discover(&card)
         .unwrap()
         .controls
         .into_iter()
@@ -132,7 +158,7 @@ fn toggles_direct_monitor_and_restores_it() {
         focusrited::scarlett2_alsa::ObservedValue::Boolean(value) => value,
         _ => unreachable!("Direct Monitor must be boolean"),
     };
-    let mut device = Scarlett2Alsa::with_writable_controls("0", BTreeSet::from([id.clone()]));
+    let mut device = Scarlett2Alsa::with_writable_controls(card, BTreeSet::from([id.clone()]));
     let target = !before;
 
     let changed = device.write(&id, Value::Bool(target));
