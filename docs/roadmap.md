@@ -44,6 +44,8 @@ disconnect/reconnect, and persistence; unsupported controls are explicit.
 
 ## Phase 3: Pi compatibility verification — planned
 
+Execution plan: [Phase 3 Pi compatibility plan](phases/phase-3-pi-compatibility.md).
+
 Develop directly on the Pi over SSH, including Zed Remote Development from a
 laptop, then validate current Solo service natively on Pi Linux. Find and fix
 target-only build, ALSA, USB, system-service, reboot, and unplug/replug issues.
