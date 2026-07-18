@@ -4,6 +4,7 @@
 //! the policy here makes discovery and state rules testable without hardware.
 
 pub mod dashboard_store;
+pub mod groups;
 pub mod ipc;
 pub mod profile_store;
 pub mod scarlett2_alsa;
@@ -11,6 +12,8 @@ pub mod startup;
 pub mod worker;
 
 use std::{collections::BTreeMap, thread, time::Duration};
+
+use groups::{GroupError, GroupResult, LevelGroup, map_level};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
 #[serde(transparent)]
@@ -181,6 +184,51 @@ impl<D: Device> Service<D> {
         Ok(())
     }
 
+    /// Ordered non-atomic compound operation. Stops at first failed confirmation.
+    pub fn command_level_group(
+        &mut self,
+        group: &LevelGroup,
+        position: u16,
+    ) -> Result<GroupResult, GroupError> {
+        group.validate(&self.snapshot.capabilities)?;
+        let commands = group
+            .members
+            .iter()
+            .map(|member| {
+                let capability = self
+                    .snapshot
+                    .capabilities
+                    .iter()
+                    .find(|item| item.id == *member)
+                    .ok_or_else(|| GroupError::IneligibleMember(member.clone()))?;
+                Ok((
+                    member.clone(),
+                    map_level(
+                        position,
+                        capability
+                            .minimum
+                            .ok_or_else(|| GroupError::IneligibleMember(member.clone()))?,
+                        capability
+                            .maximum
+                            .ok_or_else(|| GroupError::IneligibleMember(member.clone()))?,
+                    )?,
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut result = GroupResult {
+            applied: Vec::new(),
+            failed: None,
+        };
+        for (member, value) in commands {
+            if let Err(error) = self.command(&member, Value::Integer(value)) {
+                result.failed = Some((member.clone(), error));
+                return Ok(result);
+            }
+            result.applied.push(member.clone());
+        }
+        Ok(result)
+    }
+
     /// Reconcile ALSA/front-panel changes with authoritative hardware state.
     pub fn refresh(&mut self) -> Result<(), ServiceError> {
         match self.device.snapshot() {
@@ -296,8 +344,9 @@ mod tests {
 
     struct MockDevice {
         snapshot: DeviceSnapshot,
-        fail_write: bool,
+        failed_control: Option<ControlId>,
         ignore_write: bool,
+        writes: Vec<ControlId>,
     }
 
     impl Device for MockDevice {
@@ -306,7 +355,8 @@ mod tests {
         }
 
         fn write(&mut self, control: &ControlId, value: Value) -> Result<(), DeviceError> {
-            if self.fail_write {
+            self.writes.push(control.clone());
+            if self.failed_control.as_ref() == Some(control) {
                 return Err(DeviceError::Failed);
             }
             if !self.ignore_write {
@@ -333,8 +383,9 @@ mod tests {
                 }],
                 values: BTreeMap::from([(volume, Value::Integer(50))]),
             },
-            fail_write: false,
+            failed_control: None,
             ignore_write: false,
+            writes: Vec::new(),
         }
     }
 
@@ -370,7 +421,7 @@ mod tests {
     fn failed_write_does_not_change_state() {
         let volume = ControlId("output.volume".into());
         let mut device = mock();
-        device.fail_write = true;
+        device.failed_control = Some(volume.clone());
         let mut service = Service::connect(device).unwrap();
 
         assert_eq!(
@@ -403,6 +454,82 @@ mod tests {
             service.command(&volume, Value::Bool(true)),
             Err(ServiceError::InvalidValue)
         );
+    }
+
+    #[test]
+    fn level_group_confirms_each_member_in_order() {
+        let first = ControlId("output.volume".into());
+        let second = ControlId("optical.volume".into());
+        let mut device = mock();
+        device.snapshot.capabilities.push(ControlCapability {
+            id: second.clone(),
+            domain: ValueDomain::Integer,
+            writable: true,
+            available: true,
+            minimum: Some(20),
+            maximum: Some(220),
+            presentation: None,
+        });
+        device
+            .snapshot
+            .values
+            .insert(second.clone(), Value::Integer(20));
+        let mut service = Service::connect(device).unwrap();
+        let result = service
+            .command_level_group(
+                &LevelGroup {
+                    members: vec![first.clone(), second.clone()],
+                },
+                500,
+            )
+            .unwrap();
+        assert_eq!(result.applied, vec![first.clone(), second.clone()]);
+        assert_eq!(result.failed, None);
+        assert_eq!(service.snapshot().values[&first], Value::Integer(50));
+        assert_eq!(service.snapshot().values[&second], Value::Integer(120));
+    }
+
+    #[test]
+    fn level_group_stops_after_failed_member() {
+        let first = ControlId("output.volume".into());
+        let second = ControlId("optical.volume".into());
+        let third = ControlId("headphone.volume".into());
+        let mut device = mock();
+        for control in [&second, &third] {
+            device.snapshot.capabilities.push(ControlCapability {
+                id: control.clone(),
+                domain: ValueDomain::Integer,
+                writable: true,
+                available: true,
+                minimum: Some(0),
+                maximum: Some(100),
+                presentation: None,
+            });
+            device
+                .snapshot
+                .values
+                .insert(control.clone(), Value::Integer(0));
+        }
+        device.failed_control = Some(second.clone());
+        let mut service = Service::connect(device).unwrap();
+
+        let result = service
+            .command_level_group(
+                &LevelGroup {
+                    members: vec![first.clone(), second.clone(), third.clone()],
+                },
+                750,
+            )
+            .unwrap();
+
+        assert_eq!(result.applied, vec![first.clone()]);
+        assert_eq!(
+            result.failed,
+            Some((second.clone(), ServiceError::Device(DeviceError::Failed)))
+        );
+        assert_eq!(service.device.writes, vec![first.clone(), second]);
+        assert_eq!(service.snapshot().values[&first], Value::Integer(75));
+        assert_eq!(service.snapshot().values[&third], Value::Integer(0));
     }
 
     #[test]

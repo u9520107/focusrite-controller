@@ -124,6 +124,17 @@ configuration through validated CLI import/export before Phase 5 web editing.
 
 ### MR 2: Virtual group service semantics
 
+**MR 2a in progress**
+
+- Core mock-only validation accepts two-or-more unique discovered writable
+  integer leaf controls with declared bounds. It maps canonical `0..=1000`
+  positions independently into unequal ranges and executes ordered,
+  per-member-confirmed service commands. It has no worker/IPC, persistence,
+  adapter declaration, or live hardware path yet.
+- Current `position` semantics are an absolute normalized target for every
+  member. Relative-balance preservation needs an explicit anchor/baseline rule;
+  do not persist or expose this operation until that contract exists.
+
 **Scope**
 
 - Add capability-declared eligible member role/type and virtual group model.
