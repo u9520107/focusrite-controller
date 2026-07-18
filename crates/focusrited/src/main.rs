@@ -28,20 +28,20 @@ fn main() {
 
     loop {
         thread::sleep(Duration::from_secs(1));
-        match worker.refresh() {
-            Ok(state) if !online => {
+        match worker.state() {
+            Ok(state) if state.online && !online => {
                 eprintln!(
                     "focusrited: device recovered at revision {}",
                     state.revision
                 );
                 online = true;
             }
-            Ok(_) => {}
-            Err(error) if online => {
-                eprintln!("focusrited: device offline: {error}");
+            Ok(state) if !state.online && online => {
+                eprintln!("focusrited: device offline");
                 online = false;
             }
             Err(_) => {}
+            Ok(_) => {}
         }
     }
 }

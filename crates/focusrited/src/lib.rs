@@ -8,7 +8,7 @@ pub mod scarlett2_alsa;
 pub mod startup;
 pub mod worker;
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, thread, time::Duration};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ControlId(pub String);
@@ -69,6 +69,12 @@ pub enum DeviceError {
 pub trait Device {
     fn snapshot(&mut self) -> Result<DeviceSnapshot, DeviceError>;
     fn write(&mut self, control: &ControlId, value: Value) -> Result<(), DeviceError>;
+
+    /// Waits for a hardware state-change notification without writing hardware.
+    fn wait_for_change(&mut self, timeout: Duration) -> Result<bool, DeviceError> {
+        thread::sleep(timeout);
+        Ok(false)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -161,6 +167,21 @@ impl<D: Device> Service<D> {
                 }
                 Ok(())
             }
+            Err(error) => {
+                self.mark_offline();
+                Err(ServiceError::Device(error))
+            }
+        }
+    }
+
+    /// Reconciles one hardware event immediately. A false result is a timeout.
+    pub fn wait_for_change(&mut self, timeout: Duration) -> Result<bool, ServiceError> {
+        match self.device.wait_for_change(timeout) {
+            Ok(true) => {
+                self.refresh()?;
+                Ok(true)
+            }
+            Ok(false) => Ok(false),
             Err(error) => {
                 self.mark_offline();
                 Err(ServiceError::Device(error))

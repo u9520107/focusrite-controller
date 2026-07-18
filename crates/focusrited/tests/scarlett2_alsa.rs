@@ -5,9 +5,9 @@ use std::sync::Mutex;
 #[cfg(feature = "hardware-write-tests")]
 use focusrited::Device;
 use focusrited::{
-    ControlId, DeviceError, ServiceError, Value,
+    ControlId, Value,
     scarlett2_alsa::{Scarlett2Alsa, ValueType, discover},
-    worker::{DeviceWorker, WorkerError},
+    worker::DeviceWorker,
 };
 
 static HARDWARE_LOCK: Mutex<()> = Mutex::new(());
@@ -76,7 +76,7 @@ fn reconciles_external_direct_monitor_change() {
 
     for _ in 0..120 {
         std::thread::sleep(std::time::Duration::from_millis(250));
-        let current = worker.refresh().unwrap();
+        let current = worker.state().unwrap();
         if current.snapshot.values[&control] != previous {
             println!(
                 "Direct Monitor after: {:?}; revision {} to {}.",
@@ -110,26 +110,19 @@ fn reconnects_after_solo_disconnect() {
 
     for _ in 0..240 {
         std::thread::sleep(std::time::Duration::from_millis(250));
-        match worker.refresh() {
-            Ok(state) if saw_offline && state.online => {
-                println!(
-                    "Solo reconnected; revision {} to {}.",
-                    initial.revision, state.revision
-                );
-                assert!(state.revision > initial.revision);
-                worker.stop().unwrap();
-                return;
-            }
-            Ok(_) => {}
-            Err(WorkerError::Service(ServiceError::Device(DeviceError::Offline))) => {
-                if !saw_offline {
-                    let offline = worker.state().unwrap();
-                    println!("Solo offline at revision {}.", offline.revision);
-                    assert!(!offline.online);
-                    saw_offline = true;
-                }
-            }
-            Err(error) => panic!("unexpected worker error: {error:?}"),
+        let state = worker.state().unwrap();
+        if saw_offline && state.online {
+            println!(
+                "Solo reconnected; revision {} to {}.",
+                initial.revision, state.revision
+            );
+            assert!(state.revision > initial.revision);
+            worker.stop().unwrap();
+            return;
+        }
+        if !state.online && !saw_offline {
+            println!("Solo offline at revision {}.", state.revision);
+            saw_offline = true;
         }
     }
 

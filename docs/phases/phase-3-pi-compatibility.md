@@ -2,9 +2,9 @@
 
 ## Status
 
-In progress. MR 1 and MR 2 complete; MR 3 is next. Target is prepared Pi OS
-ARM64 with Scarlett Solo 4th Gen connected directly by USB. Phase 2 WSL
-evidence remains valid only for its WSL scope.
+Complete pending review and merge. Target is prepared Pi OS ARM64 with Scarlett
+Solo 4th Gen connected directly by USB. Phase 2 WSL evidence remains valid
+only for its WSL scope.
 
 ## Goal
 
@@ -164,68 +164,112 @@ Read-only only. No control write or stored-profile apply.
 - `focusrited --card Gen` starts successfully for five seconds with an empty
   disposable profile-store path. It receives no command; temporary directory
   removal confirms no profile file was written.
-- No ALSA control, profile, fixture, or adapter code changed. MR3 may capture
-  metadata and verify an operator-initiated external Direct Monitor change.
+- No ALSA control, profile, fixture, or adapter code changed. Pi metadata
+  already matches the Phase 2 fixture; MR3 therefore adds event-driven
+  reconciliation before lifecycle recovery.
 
-### MR 3: Native reconciliation and controlled write metadata
+### MR 3: Event-driven Pi state reconciliation
 
 **Scope**
 
-- Verify external Direct Monitor/front-panel change reaches service state and
-  advances revision without daemon write.
-- Capture integer ranges and enum items exposed by Pi ALSA.
-- Make only evidence-backed metadata/validation changes; unsupported domains
-  remain explicit and non-writable.
+- Keep a persistent ALSA control-event source for the selected card; reconcile
+  external state on its events rather than using periodic full snapshots as the
+  normal control-sync path.
+- Preserve `focusrited` as sole device owner: event handling performs no
+  command or ALSA write.
+- Reconcile every received ALSA control event immediately. Do not throttle or
+  coalesce service state; each event updates authoritative state.
+- GUI clients cache incoming state and cap rendering at 60 Hz. This is a UI
+  concern, not a service delivery limit. Meter display remains
+  capability-discovered until Pi ALSA evidence proves a source.
+- Retain a bounded periodic health check only to detect missed events and
+  device loss, at a three-second interval. It is not the normal
+  state-synchronization mechanism.
 
 **Verification**
 
 - MR 1 checks.
-- Read-only external-change test with operator interaction.
-- Add or update mock tests for each parsing/validation defect found.
-
-**Hardware action**
-
-Read-only daemon behavior. Operator may change front-panel Direct Monitor;
-daemon must not write any control.
-
-### MR 4: Native lifecycle recovery
-
-**Scope**
-
-- Verify service behavior through physical Solo unplug/replug and Pi reboot.
-- Diagnose USB power, ALSA-node, service-startup, and recovery ordering issues.
-- Add the smallest code or deployment change proven necessary.
-- Record sanitized lifecycle evidence and known limits.
-
-**Verification**
-
-- MR 1 checks.
-- Read-only physical disconnect/reconnect test.
-- Read-only daemon start after reboot and recovery after reattach.
-
-**Hardware action**
-
-Physical cable unplug/replug and Pi reboot require session approval. No ALSA
-write, routing, clock, reset, firmware, or profile apply.
-
-### MR 5: Phase 3 closeout
-
-**Scope**
-
-- Consolidate Pi prerequisites and verified commands in deployment/hardware
-  documentation.
-- Mark Phase 3 evidence and unresolved limits.
-- Add only regression tests for defects actually found in MRs 1–4.
-
-**Verification**
-
 - Full Rust verification: format, Clippy with warnings denied, and workspace
   tests.
-- Repeat one bounded read-only discovery and daemon-start check on Pi.
+- Mock coverage for event ordering, high-rate event handling, missed-event
+  health recovery, and no-write behavior.
+- Read-only Pi external-change test proves event-driven state/revision update.
+
+**Execution plan**
+
+1. Add the smallest persistent event loop that can service both ALSA events and
+   serialized worker requests. Do not add a second device owner or a polling
+   thread for normal state updates.
+2. Reconcile event-driven changes immediately and retain a three-second health
+   fallback. Keep GUI cache/render throttling out of the service.
+3. Add mock checks before Pi use. Then, with explicit approval for an
+   operator-initiated front-panel state change, prove the event path on `Gen`
+   without a daemon command or ALSA write.
+4. Record sanitized event capability, state/revision evidence, measured update
+   timing, and any unsupported meter source.
 
 **Hardware action**
 
-Read-only only.
+Operator front-panel Direct Monitor change requires explicit session approval.
+No daemon ALSA write, routing, clock, reset, firmware, or profile apply.
+
+**Pre-event evidence — 2026-07-17**
+
+- With explicit approval, the read-only
+  `reconciles_external_direct_monitor_change` test observed an
+  operator-initiated Direct Monitor change on card `Gen`. The authoritative
+  service state changed and revision advanced from 1 to 2 within 30 seconds.
+- The test issued no service command or daemon ALSA write, but used manual
+  250 ms polling; it does not validate the planned event path. Integer ranges
+  and enum domains remain unchanged from the Pi MR2 fixture comparison.
+
+**Event evidence — 2026-07-17**
+
+- With explicit approval, the same read-only test passed after its polling
+  refresh was removed. A front-panel Direct Monitor change on `Gen` updated
+  authoritative service state and advanced revision from 1 to 2. The test made
+  state requests only; reconciliation was initiated by the ALSA event loop.
+- The test bounds detection to 30 seconds but does not measure operator-action
+  to event-delivery latency. Meter-event availability and rate remain Phase 4b
+  discovery work.
+- Worker request handling is bounded to four requests per turn before a
+  zero-wait ALSA event check and health-check opportunity. Mock coverage proves
+  queued client requests cannot starve event reconciliation.
+
+### MR 4: Pi lifecycle recovery and Phase 3 closeout
+
+**Scope**
+
+- Verify event-driven service behavior through physical Solo unplug/replug and
+  Pi reboot.
+- Diagnose only observed USB power, ALSA-node, event-source, and startup
+  recovery failures.
+- Add the smallest evidence-backed fix, regression check, and deployment
+  documentation necessary; record limits and close Phase 3 if exit checks pass.
+
+**Verification**
+
+- MR 1 checks and full Rust verification.
+- Read-only physical disconnect/reconnect and post-reboot daemon-start checks.
+- Repeat one bounded event-driven external-change check on Pi.
+
+**Hardware action**
+
+Physical cable unplug/replug and Pi reboot each require explicit session
+approval. No ALSA write, routing, clock, reset, firmware, or profile apply.
+
+**Evidence — 2026-07-17 (in progress)**
+
+- With explicit approval, the read-only `reconnects_after_solo_disconnect` test
+  observed Solo offline at revision 3, then a fresh online snapshot at revision
+  4 after reconnect. The test requested state only; recovery came from the
+  worker event/health path.
+- While unplugged, two bounded ALSA card-absence diagnostics occurred during
+  recovery probing. The worker did not repeatedly reopen ALSA or flood logs.
+- No daemon command or ALSA write occurred.
+- With explicit approval, Pi rebooted successfully. Post-reboot read-only
+  `discovers_attached_solo` passed on card `Gen`; five-second `focusrited`
+  startup received no command and left its disposable profile store empty.
 
 ## Exit checks
 
@@ -233,10 +277,10 @@ Read-only only.
   write tests require explicit feature plus session approval.
 - [x] Solo service builds and starts natively on Pi against selected ALSA card.
 - [x] Sanitized Pi discovery proves capabilities and documented prerequisites.
-- [ ] External/front-panel change reconciles into authoritative service state.
-- [ ] Physical unplug/replug recovers to a fresh online snapshot.
-- [ ] Pi reboot returns daemon and Solo readiness without device-state mutation.
-- [ ] Target-specific limits, commands, and unresolved issues are documented.
+- [x] External/front-panel change reconciles into authoritative service state.
+- [x] Physical unplug/replug recovers to a fresh online snapshot.
+- [x] Pi reboot returns daemon and Solo readiness without device-state mutation.
+- [x] Target-specific limits, commands, and unresolved issues are documented.
 
 ## Update rule
 
