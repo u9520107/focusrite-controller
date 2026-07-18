@@ -76,7 +76,14 @@ impl Drop for LocalServer {
 
 fn remove_stale_socket(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_socket() => fs::remove_file(path),
+        Ok(metadata) if metadata.file_type().is_socket() => match UnixStream::connect(path) {
+            Ok(_) => Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "socket is already owned by a running daemon",
+            )),
+            Err(error) if error.kind() == io::ErrorKind::ConnectionRefused => fs::remove_file(path),
+            Err(error) => Err(error),
+        },
         Ok(_) => Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
             "socket path exists and is not a socket",
@@ -110,9 +117,12 @@ fn run(listener: UnixListener, worker: Arc<DeviceWorker>, running: Arc<AtomicBoo
             );
         }
         clients.retain_mut(|client| {
+            if client.closing {
+                return flush_client(client) && client.has_pending_output();
+            }
             let readable = read_client(client, &worker, &instance_id);
             let written = flush_client(client);
-            readable && written && !client.closing
+            readable && written && (!client.closing || client.has_pending_output())
         });
         thread::sleep(LOOP_WAIT);
     }
@@ -145,6 +155,13 @@ fn accept_clients(
 }
 
 fn read_client(client: &mut Client, worker: &Arc<DeviceWorker>, instance_id: &str) -> bool {
+    let mut remaining = REQUEST_BATCH_LIMIT;
+    if !process_requests(client, worker, instance_id, &mut remaining) {
+        return false;
+    }
+    if client.input.contains(&b'\n') {
+        return true;
+    }
     let mut bytes = [0; 4096];
     match client.stream.read(&mut bytes) {
         Ok(0) => return false,
@@ -157,10 +174,22 @@ fn read_client(client: &mut Client, worker: &Arc<DeviceWorker>, instance_id: &st
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
         Err(_) => return false,
     }
-    for _ in 0..REQUEST_BATCH_LIMIT {
+    process_requests(client, worker, instance_id, &mut remaining)
+}
+
+fn process_requests(
+    client: &mut Client,
+    worker: &Arc<DeviceWorker>,
+    instance_id: &str,
+    remaining: &mut usize,
+) -> bool {
+    while *remaining > 0 {
         let Some(end) = client.input.iter().position(|byte| *byte == b'\n') else {
             break;
         };
+        if end + 1 > MAX_MESSAGE_BYTES {
+            return client.reject("message_too_large");
+        }
         let line = client.input.drain(..=end).collect::<Vec<_>>();
         let line = &line[..line.len() - 1];
         match serde_json::from_slice::<Request>(line) {
@@ -176,6 +205,7 @@ fn read_client(client: &mut Client, worker: &Arc<DeviceWorker>, instance_id: &st
                 return client.reject("malformed_message");
             }
         }
+        *remaining -= 1;
     }
     true
 }
@@ -200,30 +230,46 @@ fn handle_request(
         },
         _ => error_message("unknown_message_type"),
     };
-    client.queue(Outbound::Reply(message))
+    if client.queue(Outbound::Reply(message)) {
+        true
+    } else {
+        client.closing = true;
+        true
+    }
 }
 
 fn flush_client(client: &mut Client) -> bool {
-    while let Some(message) = client.outbound.front_mut() {
-        match client.stream.write(&message.bytes[message.offset..]) {
-            Ok(0) => return false,
-            Ok(count) => message.offset += count,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return true,
-            Err(_) => return false,
+    loop {
+        if let Some(message) = client.outbound.front_mut() {
+            match client.stream.write(&message.bytes[message.offset..]) {
+                Ok(0) => return false,
+                Ok(count) => message.offset += count,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return true,
+                Err(_) => return false,
+            }
+            if let Some(message) = client
+                .outbound
+                .pop_front_if(|message| message.offset == message.bytes.len())
+            {
+                client.outbound_bytes -= message.bytes.len();
+            }
+            continue;
         }
-        if let Some(message) = client
-            .outbound
-            .pop_front_if(|message| message.offset == message.bytes.len())
-        {
-            client.outbound_bytes -= message.bytes.len();
+        if let Some(error) = client.rejection.take() {
+            if !client.queue(Outbound::Reply(error_message(error))) {
+                return false;
+            }
+            continue;
         }
+        return true;
     }
-    true
 }
 
 fn broadcast(clients: &mut [Client], message: Outbound) {
     for client in clients {
-        let _ = client.queue(message.clone());
+        if !client.queue(message.clone()) {
+            client.closing = true;
+        }
     }
 }
 
@@ -233,6 +279,7 @@ struct Client {
     outbound: VecDeque<Message>,
     outbound_bytes: usize,
     closing: bool,
+    rejection: Option<&'static str>,
 }
 
 impl Client {
@@ -243,6 +290,7 @@ impl Client {
             outbound: VecDeque::new(),
             outbound_bytes: 0,
             closing: false,
+            rejection: None,
         }
     }
 
@@ -283,7 +331,12 @@ impl Client {
 
     fn reject(&mut self, error: &'static str) -> bool {
         self.closing = true;
-        self.queue(Outbound::Reply(error_message(error)))
+        self.rejection = Some(error);
+        true
+    }
+
+    fn has_pending_output(&self) -> bool {
+        !self.outbound.is_empty() || self.rejection.is_some()
     }
 }
 
@@ -627,6 +680,52 @@ mod tests {
         };
         while client.queue(large_reply()) {}
         assert!(client.outbound_bytes <= MAX_OUTBOUND_BYTES);
+
+        let (stream, _peer) = UnixStream::pair().unwrap();
+        let mut full_client = Client::new(stream);
+        full_client.outbound.push_back(Message {
+            bytes: vec![b'x'; MAX_OUTBOUND_BYTES],
+            offset: 0,
+            event: false,
+        });
+        full_client.outbound_bytes = MAX_OUTBOUND_BYTES;
+        let mut clients = vec![full_client];
+        broadcast(&mut clients, event(3));
+        assert!(clients[0].closing);
+    }
+
+    #[test]
+    fn valid_pipelined_requests_are_limited_per_message() {
+        let (server, worker, _) = server();
+        let (stream, _peer) = UnixStream::pair().unwrap();
+        let mut client = Client::new(stream);
+        client.input = b"{\"v\":1,\"type\":\"snapshot\"}\n".repeat(3_000);
+
+        assert!(read_client(&mut client, &worker, "test"));
+        assert!(!client.closing);
+        assert!(client.input.len() > MAX_MESSAGE_BYTES);
+
+        server.stop();
+        worker.stop().unwrap();
+    }
+
+    #[test]
+    fn rejection_waits_for_queued_output_before_disconnect() {
+        let (stream, _peer) = UnixStream::pair().unwrap();
+        let mut client = Client::new(stream);
+        assert!(client.queue(Outbound::Reply(Response {
+            v: PROTOCOL_VERSION,
+            kind: "snapshot",
+            instance_id: None,
+            revision: None,
+            online: None,
+            snapshot: None,
+            error: None,
+        })));
+        assert!(client.reject("malformed_message"));
+        assert!(client.has_pending_output());
+        assert!(flush_client(&mut client));
+        assert!(!client.has_pending_output());
     }
 
     #[test]
@@ -644,6 +743,16 @@ mod tests {
         assert_eq!(error["error"], "malformed_message");
         let mut line = String::new();
         assert_eq!(reader.read_line(&mut line).unwrap(), 0);
+
+        server.stop();
+        worker.stop().unwrap();
+    }
+
+    #[test]
+    fn startup_keeps_live_daemon_socket_intact() {
+        let (server, worker, path) = server();
+        assert!(LocalServer::start(Arc::clone(&worker), path.clone()).is_err());
+        assert!(UnixStream::connect(&path).is_ok());
 
         server.stop();
         worker.stop().unwrap();
