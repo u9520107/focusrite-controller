@@ -19,7 +19,6 @@ use focusrited::{
 use serde::Deserialize;
 
 const DASHBOARD_LIMIT: usize = 12;
-const FRAME_INTERVAL: Duration = Duration::from_millis(16);
 const COMMAND_INTERVAL: Duration = Duration::from_millis(33);
 const DEFAULT_AUTO_LOCK_AFTER: Duration = Duration::from_secs(60);
 const UNLOCK_TARGET_SIZE: f32 = 64.0;
@@ -28,7 +27,6 @@ const UNLOCK_TIMEOUT: Duration = Duration::from_secs(5);
 fn main() -> eframe::Result<()> {
     let (sender, receiver) = mpsc::channel();
     let demo = env::var_os("FOCUSRITE_UI_DEMO").is_some();
-    let snapshot_sender = (!demo).then(|| spawn_socket_reader(sender, socket_path()));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_decorations(false)
@@ -39,7 +37,9 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Focusrite Controller",
         options,
-        Box::new(|_| {
+        Box::new(|cc| {
+            let snapshot_sender =
+                (!demo).then(|| spawn_socket_reader(sender, socket_path(), cc.egui_ctx.clone()));
             Ok(Box::new(TouchscreenApp::new(
                 receiver,
                 snapshot_sender,
@@ -58,6 +58,7 @@ fn socket_path() -> PathBuf {
 fn spawn_socket_reader(
     sender: mpsc::Sender<SocketEvent>,
     socket_path: PathBuf,
+    context: egui::Context,
 ) -> mpsc::Sender<ReaderRequest> {
     let (request_sender, request_receiver) = mpsc::channel();
     thread::spawn(move || {
@@ -66,11 +67,13 @@ fn spawn_socket_reader(
                 Ok(stream) => stream,
                 Err(_) => {
                     let _ = sender.send(SocketEvent::Disconnected);
+                    context.request_repaint();
                     thread::sleep(Duration::from_secs(1));
                     continue;
                 }
             };
             let _ = sender.send(SocketEvent::Connected);
+            context.request_repaint();
             let _ = stream.set_read_timeout(Some(Duration::from_millis(250)));
             let mut writer = match stream.try_clone() {
                 Ok(stream) => stream,
@@ -92,9 +95,11 @@ fn spawn_socket_reader(
                     Ok(_) => match serde_json::from_str::<Response>(&line) {
                         Ok(response) => {
                             let _ = sender.send(SocketEvent::Response(Box::new(response)));
+                            context.request_repaint();
                         }
                         Err(_) => {
                             let _ = sender.send(SocketEvent::Malformed);
+                            context.request_repaint();
                         }
                     },
                     Err(error)
@@ -463,7 +468,7 @@ impl eframe::App for TouchscreenApp {
             self.focus = None;
             self.close_focus_next_frame = false;
         }
-        ui.ctx().request_repaint_after(FRAME_INTERVAL);
+        self.schedule_repaint(ui.ctx(), now);
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         apply_style(ui.ctx());
         if self.calibration.is_some() {
@@ -638,6 +643,29 @@ impl eframe::App for TouchscreenApp {
 }
 
 impl TouchscreenApp {
+    fn schedule_repaint(&self, context: &egui::Context, now: Instant) {
+        let mut next = None;
+        if !self.locked {
+            if let Some(timeout) = self.auto_lock_after {
+                next = Some(timeout.saturating_sub(now.duration_since(self.last_touch)));
+            }
+        } else if let Some(started) = self.unlock_started {
+            next = Some(UNLOCK_TIMEOUT.saturating_sub(now.duration_since(started)));
+        }
+        if !self.pending_commands.is_empty() {
+            next = Some(next.map_or(COMMAND_INTERVAL, |delay: Duration| {
+                delay.min(COMMAND_INTERVAL)
+            }));
+        }
+        if let Some((_, shown)) = &self.toast {
+            let delay = Duration::from_secs(3).saturating_sub(now.duration_since(*shown));
+            next = Some(next.map_or(delay, |current: Duration| current.min(delay)));
+        }
+        if let Some(delay) = next {
+            context.request_repaint_after(delay);
+        }
+    }
+
     fn locked_ui(&mut self, ui: &mut egui::Ui, touches: &[egui::Pos2]) {
         let rect = ui.max_rect();
         for (step, label) in ["1", "2", "3", "4"].into_iter().enumerate() {
@@ -1353,7 +1381,8 @@ mod tests {
             finish_received.recv().unwrap();
         });
         let (event_sender, event_receiver) = mpsc::channel();
-        let request_sender = spawn_socket_reader(event_sender, path.clone());
+        let request_sender =
+            spawn_socket_reader(event_sender, path.clone(), egui::Context::default());
         let mut app = TouchscreenApp::new(event_receiver, Some(request_sender), false);
         let control = ControlId("control-Some(0)".into());
 

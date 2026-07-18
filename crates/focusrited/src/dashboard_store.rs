@@ -113,6 +113,15 @@ impl DashboardStore {
         }
     }
 
+    pub fn load_required(&self) -> io::Result<DashboardConfig> {
+        self.load()?.ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "dashboard configuration does not exist",
+            )
+        })
+    }
+
     /// Writes complete configuration through a same-directory temporary file.
     pub fn save(&self, config: &DashboardConfig, snapshot: &DeviceSnapshot) -> io::Result<()> {
         config.validate_for(snapshot)?;

@@ -11,9 +11,11 @@ use std::{
 };
 
 use focusrited::{
+    Device,
+    dashboard_store::{DashboardConfig, DashboardStore},
     ipc::LocalServer,
     scarlett2_alsa::Scarlett2Alsa,
-    startup::{Config, ConfigError, load_dashboard, load_profiles},
+    startup::{Config, ConfigError, DashboardAction, load_dashboard, load_profiles},
     worker::DeviceWorker,
 };
 
@@ -32,6 +34,10 @@ fn main() {
         .card
         .as_deref()
         .unwrap_or_else(|| fail("--card is required"));
+    if config.dashboard_action.is_some() {
+        dashboard_action(card, &config).unwrap_or_else(|error| fail(error));
+        return;
+    }
     let profiles = load_profiles(&config).unwrap_or_else(|error| fail(error));
     let dashboard = load_dashboard(&config).unwrap_or_else(|error| fail(error));
     let worker = Arc::new(
@@ -63,6 +69,35 @@ fn main() {
     }
     ipc.stop();
     let _ = worker.stop();
+}
+
+fn dashboard_action(card: &str, config: &Config) -> io::Result<()> {
+    let mut device = Scarlett2Alsa::new(card);
+    let snapshot = device
+        .snapshot()
+        .map_err(|error| io::Error::other(format!("read-only discovery failed: {error:?}")))?;
+    let store = DashboardStore::new(&config.dashboard_store_path);
+    match config.dashboard_action.as_ref().expect("checked by caller") {
+        DashboardAction::Inspect => {
+            let dashboard = store
+                .load()?
+                .unwrap_or_else(|| DashboardConfig::defaults(&snapshot));
+            dashboard.validate_for(&snapshot)?;
+            serde_json::to_writer_pretty(io::stdout(), &dashboard).map_err(io::Error::other)?;
+            println!();
+        }
+        DashboardAction::Export(path) => {
+            let dashboard = store
+                .load()?
+                .unwrap_or_else(|| DashboardConfig::defaults(&snapshot));
+            DashboardStore::new(path).save(&dashboard, &snapshot)?;
+        }
+        DashboardAction::Import(path) => {
+            let dashboard = DashboardStore::new(path).load_required()?;
+            store.save(&dashboard, &snapshot)?;
+        }
+    }
+    Ok(())
 }
 
 extern "C" fn request_shutdown(_: libc::c_int) {

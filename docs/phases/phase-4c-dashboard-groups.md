@@ -84,18 +84,21 @@ configuration through validated CLI import/export before Phase 5 web editing.
 - Missing file uses adapter defaults in memory without creating a file. A
   present malformed, mismatched, or unavailable-control file rejects daemon
   startup before IPC begins; it never replaces a valid in-memory config.
-- Save validates before same-directory atomic replacement. No save/import
-  endpoint exists yet, therefore this implementation has no hardware command
-  path.
+- Save validates before same-directory atomic replacement. CLI import/export
+  operates on metadata only and exits before daemon/socket startup; it has no
+  hardware command path.
 - Daemon state and existing IPC snapshot/event/command-result messages carry
   additive `dashboard` metadata. Touch UI renders this configured order and
   custom strip labels, while retaining its existing safety checks.
 
-**MR 1b next**
+**MR 1b complete**
 
-- Add explicit inspect/export/import CLI that validates a candidate against
-  current discovered capability data before calling atomic save. Do not add a
-  file watcher or a touchscreen text editor.
+- `focusrited --card CARD --dashboard-inspect` prints current stored dashboard
+  or read-only adapter defaults as JSON. `--dashboard-export PATH` writes that
+  same validated JSON to a chosen path. `--dashboard-import PATH` reads a
+  candidate, validates it against current read-only discovery, then atomically
+  replaces only daemon dashboard metadata. Actions are mutually exclusive and
+  exit before daemon/socket startup. No file watcher or touchscreen text editor.
 
 **Scope**
 
