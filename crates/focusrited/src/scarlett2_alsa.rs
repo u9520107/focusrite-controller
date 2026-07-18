@@ -243,6 +243,7 @@ fn snapshot_from(discovery: Discovery, writable_controls: &BTreeSet<ControlId>) 
             available: control.available,
             minimum: None,
             maximum: None,
+            presentation: None,
         });
         if control.available {
             values.insert(control.id, control_value(&control.values));

@@ -3,6 +3,7 @@
 //! Linux/ALSA adapters and client transports sit outside this module.  Keeping
 //! the policy here makes discovery and state rules testable without hardware.
 
+pub mod dashboard_store;
 pub mod ipc;
 pub mod profile_store;
 pub mod scarlett2_alsa;
@@ -24,7 +25,7 @@ pub enum Value {
     Array(Vec<Value>),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ValueDomain {
     Boolean,
@@ -34,7 +35,27 @@ pub enum ValueDomain {
     Array,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PresentationKind {
+    Level,
+    Mute,
+}
+
+/// Adapter-declared UI metadata. Absence means client must not guess display.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ControlPresentation {
+    pub label: String,
+    pub kind: PresentationKind,
+    /// Lower values appear first in the adapter-default dashboard.
+    pub default_dashboard_order: Option<u8>,
+    /// Compatible level/mute control, when discovery proves the association.
+    pub companion: Option<ControlId>,
+    /// Real integer increment when the hardware declares one.
+    pub step: Option<i32>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ControlCapability {
     pub id: ControlId,
     pub domain: ValueDomain,
@@ -42,9 +63,11 @@ pub struct ControlCapability {
     pub available: bool,
     pub minimum: Option<i32>,
     pub maximum: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presentation: Option<ControlPresentation>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct DeviceSnapshot {
     /// Opaque adapter-provided identity. Profiles never cross this boundary.
     pub device_id: String,
@@ -306,6 +329,7 @@ mod tests {
                     available: true,
                     minimum: Some(0),
                     maximum: Some(100),
+                    presentation: None,
                 }],
                 values: BTreeMap::from([(volume, Value::Integer(50))]),
             },

@@ -19,7 +19,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ControlId, DeviceSnapshot, ServiceError, Value, worker::DeviceWorker};
+use crate::{
+    ControlId, DeviceSnapshot, ServiceError, Value, dashboard_store::DashboardConfig,
+    worker::DeviceWorker,
+};
 
 const PROTOCOL_VERSION: u8 = 1;
 const MAX_MESSAGE_BYTES: usize = 64 * 1024;
@@ -396,6 +399,8 @@ struct Response {
     #[serde(skip_serializing_if = "Option::is_none")]
     snapshot: Option<DeviceSnapshot>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    dashboard: Option<DashboardConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<&'static str>,
 }
 
@@ -407,6 +412,7 @@ fn state_message(instance_id: &str, kind: &'static str, state: crate::worker::St
         revision: Some(state.revision),
         online: Some(state.online),
         snapshot: Some(state.snapshot),
+        dashboard: Some(state.dashboard),
         error: None,
     }
 }
@@ -419,12 +425,14 @@ fn error_message(error: &'static str) -> Response {
         revision: None,
         online: None,
         snapshot: None,
+        dashboard: None,
         error: Some(error),
     }
 }
 
 fn service_error(error: crate::worker::WorkerError) -> &'static str {
     match error {
+        crate::worker::WorkerError::Dashboard(_) => "dashboard_invalid",
         crate::worker::WorkerError::Stopped => "worker_stopped",
         crate::worker::WorkerError::Service(ServiceError::Device(_)) => "device_error",
         crate::worker::WorkerError::Service(ServiceError::UnknownControl) => "unknown_control",
@@ -446,7 +454,9 @@ mod tests {
     };
 
     use super::*;
-    use crate::{ControlCapability, Device, DeviceError, ValueDomain};
+    use crate::{
+        ControlCapability, ControlPresentation, Device, DeviceError, PresentationKind, ValueDomain,
+    };
 
     struct MockDevice(DeviceSnapshot);
 
@@ -500,6 +510,13 @@ mod tests {
                     available: true,
                     minimum: Some(0),
                     maximum: Some(100),
+                    presentation: Some(ControlPresentation {
+                        label: "KEF level".into(),
+                        kind: PresentationKind::Level,
+                        default_dashboard_order: Some(1),
+                        companion: None,
+                        step: None,
+                    }),
                 }],
                 values: BTreeMap::from([(control, Value::Integer(50))]),
             }))
@@ -532,6 +549,7 @@ mod tests {
                         available: true,
                         minimum: Some(0),
                         maximum: Some(100),
+                        presentation: None,
                     }],
                     values: BTreeMap::from([(control, Value::Integer(50))]),
                 },
@@ -579,6 +597,14 @@ mod tests {
         let snapshot = read_json(&mut reader);
         assert_eq!(snapshot["type"], "snapshot");
         assert_eq!(snapshot["revision"], 1);
+        assert_eq!(
+            snapshot["snapshot"]["capabilities"][0]["presentation"]["label"],
+            "KEF level"
+        );
+        assert_eq!(
+            snapshot["snapshot"]["capabilities"][0]["presentation"]["kind"],
+            "level"
+        );
         stream
             .write_all(
                 b"{\"v\":1,\"type\":\"command\",\"control\":\"output.level\",\"value\":{\"type\":\"integer\",\"value\":75}}\n",
@@ -666,6 +692,7 @@ mod tests {
                 revision: Some(revision),
                 online: Some(true),
                 snapshot: None,
+                dashboard: None,
                 error: None,
             })
         };
@@ -687,6 +714,7 @@ mod tests {
                 revision: None,
                 online: None,
                 snapshot: None,
+                dashboard: None,
                 error: None,
             })
         };
@@ -785,6 +813,7 @@ mod tests {
             revision: None,
             online: None,
             snapshot: None,
+            dashboard: None,
             error: None,
         })));
         assert!(client.reject("malformed_message"));

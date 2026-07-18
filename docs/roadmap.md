@@ -71,10 +71,11 @@ Execution plan: [Phase 4a local touchscreen plan](phases/phase-4a-local-touchscr
 
 MR 1 provides merged versioned Unix-socket snapshot, command, and event
 messages. Next proposed slice, MR 2a, adds capability presentation metadata so
-touchscreen selects primary controls without device-specific IDs. MR 2b then
-builds smallest fullscreen client using local API only. Add capability groups
-only after screen-fit validation. Local profile workflow remains MR 3:
-save/list, binding/diff dry-run, reviewed apply, and per-control results.
+touchscreen renders safe adapter-default level/mute strips without device-
+specific IDs. MR 2b then builds smallest fullscreen client using local API
+only. Phase 4c later adds persisted dashboard configuration, groups, and sync
+sets. Local profile workflow remains MR 3: save/list, binding/diff dry-run,
+reviewed apply, and per-control results.
 
 Exit: hardware controller works from Pi display; touchscreen-client crash does
 not affect daemon; mock IPC tests cover command ordering, reconnect, and
@@ -89,6 +90,20 @@ added. Devices without a proven meter source omit the feature.
 
 Exit: supported hardware shows current meter values without affecting command
 ordering or device control; unsupported hardware remains fully usable.
+
+## Phase 4c: Dashboard configuration and virtual groups — planned
+
+Execution plan: [Phase 4c dashboard groups plan](phases/phase-4c-dashboard-groups.md).
+
+Add daemon-owned, portable dashboard configuration and safe virtual input/output
+groups. Begin with validated CLI export/import and mock service semantics, then
+render configured groups on touchscreen. Group creation/membership editing is
+deferred to Phase 5 web UI; touchscreen consumes groups and stays keyboard-free.
+This work follows Phase 4a and does not wait for optional Phase 4b metering.
+
+Exit: configured dashboard survives restart; individual and virtual tracks are
+independently controllable; non-native group results are confirmed per member;
+config import/export never writes hardware.
 
 ## Phase 5: LAN and web access — planned
 

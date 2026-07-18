@@ -4,16 +4,19 @@ use std::{io, path::PathBuf};
 
 use crate::{
     Device, Service, ServiceError,
+    dashboard_store::{DashboardConfig, DashboardStore},
     profile_store::{ProfileStore, Profiles},
 };
 
 pub const DEFAULT_PROFILE_STORE_PATH: &str = "/var/lib/focusrited/profiles";
+pub const DEFAULT_DASHBOARD_STORE_PATH: &str = "/var/lib/focusrited/dashboard.json";
 pub const DEFAULT_SOCKET_PATH: &str = "/run/focusrited/focusrited.sock";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     pub card: Option<String>,
     pub profile_store_path: PathBuf,
+    pub dashboard_store_path: PathBuf,
     pub socket_path: PathBuf,
 }
 
@@ -22,6 +25,7 @@ impl Default for Config {
         Self {
             card: None,
             profile_store_path: DEFAULT_PROFILE_STORE_PATH.into(),
+            dashboard_store_path: DEFAULT_DASHBOARD_STORE_PATH.into(),
             socket_path: DEFAULT_SOCKET_PATH.into(),
         }
     }
@@ -49,6 +53,12 @@ impl Config {
                         .map(PathBuf::from)
                         .ok_or(ConfigError::MissingSocketPath)?;
                 }
+                "--dashboard-store" => {
+                    config.dashboard_store_path = arguments
+                        .next()
+                        .map(PathBuf::from)
+                        .ok_or(ConfigError::MissingDashboardStorePath)?;
+                }
                 "--help" | "-h" => return Err(ConfigError::Help),
                 _ => return Err(ConfigError::UnknownArgument(argument)),
             }
@@ -62,6 +72,7 @@ pub enum ConfigError {
     Help,
     MissingCard,
     MissingProfileStorePath,
+    MissingDashboardStorePath,
     MissingSocketPath,
     UnknownArgument(String),
 }
@@ -70,9 +81,10 @@ impl std::fmt::Display for ConfigError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Help => formatter
-                .write_str("usage: focusrited --card CARD [--profile-store PATH] [--socket PATH]"),
+                .write_str("usage: focusrited --card CARD [--profile-store PATH] [--dashboard-store PATH] [--socket PATH]"),
             Self::MissingCard => formatter.write_str("--card requires an ALSA card name"),
             Self::MissingProfileStorePath => formatter.write_str("--profile-store requires a path"),
+            Self::MissingDashboardStorePath => formatter.write_str("--dashboard-store requires a path"),
             Self::MissingSocketPath => formatter.write_str("--socket requires a path"),
             Self::UnknownArgument(argument) => write!(formatter, "unknown argument: {argument}"),
         }
@@ -107,6 +119,10 @@ pub fn connect<D: Device>(device: D, config: &Config) -> Result<Service<D>, Star
 
 pub fn load_profiles(config: &Config) -> io::Result<Profiles> {
     ProfileStore::new(&config.profile_store_path).load()
+}
+
+pub fn load_dashboard(config: &Config) -> io::Result<Option<DashboardConfig>> {
+    DashboardStore::new(&config.dashboard_store_path).load()
 }
 
 #[cfg(test)]
@@ -159,6 +175,7 @@ mod tests {
                 available: true,
                 minimum: Some(0),
                 maximum: Some(100),
+                presentation: None,
             }],
             values: BTreeMap::from([(control, Value::Integer(value))]),
         })
@@ -171,6 +188,7 @@ mod tests {
         let config = Config {
             card: None,
             profile_store_path: path.clone(),
+            dashboard_store_path: path.with_extension("dashboard.json"),
             socket_path: DEFAULT_SOCKET_PATH.into(),
         };
         let store = ProfileStore::new(&path);

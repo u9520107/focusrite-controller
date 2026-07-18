@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Focusrite Controller UX mockup</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --background: #111315;
+      --surface: #1b2024;
+      --surface-strong: #252c31;
+      --text: #f4f7f8;
+      --muted: #a8b2b7;
+      --accent: #55d6bc;
+      --danger: #f38b8b;
+      --warning: #f6c76a;
+      font: 500 clamp(16px, 1.7vw, 20px)/1.3 system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; background: #08090a; color: var(--text); }
+    button, select { font: inherit; }
+    button { border: 0; color: inherit; cursor: pointer; }
+
+    .review-bar {
+      display: flex;
+      gap: .5rem;
+      flex-wrap: wrap;
+      padding: .7rem;
+      background: #252a2e;
+    }
+
+    .review-bar button {
+      min-height: 2.25rem;
+      padding: .35rem .75rem;
+      border-radius: .45rem;
+      background: #3c464d;
+    }
+
+    .review-bar button:hover, .review-bar button:focus-visible { outline: 3px solid var(--accent); }
+    .review-bar button[aria-pressed="true"] { background: var(--accent); color: #05231e; }
+
+    .prototype {
+      width: min(100%, 42rem);
+      min-height: calc(100vh - 3.7rem);
+      margin: auto;
+      padding: clamp(1rem, 3vw, 2rem);
+      background: var(--background);
+    }
+
+    .header, .section-head, .control-row, .settings-row, .bottom-nav, .header-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: .8rem;
+    }
+
+    .header { margin-bottom: 1.25rem; }
+    .header-actions { justify-content: end; }
+    .eyebrow, .status { color: var(--muted); font-size: .78em; text-transform: uppercase; letter-spacing: .08em; }
+    h1, h2, p { margin: 0; }
+    h1 { font-size: 1.45em; }
+    h2 { font-size: 1em; }
+    .status { display: flex; align-items: center; gap: .4rem; }
+    .dot { width: .65rem; height: .65rem; border-radius: 50%; background: var(--accent); }
+    .offline .dot { background: var(--danger); }
+    .reconnecting .dot { background: var(--warning); }
+
+    .groups { display: flex; gap: .45rem; overflow-x: auto; margin-bottom: .8rem; }
+    .groups button, .secondary { min-height: 3rem; border-radius: .45rem; background: var(--surface-strong); padding: .5rem .8rem; }
+    .groups button[aria-current="page"] { background: var(--accent); color: #05231e; }
+
+    .panel { background: var(--surface); border-radius: .6rem; padding: .8rem; }
+    .panel + .panel { margin-top: .6rem; }
+    .track-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
+    .track-grid.dense { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .track-grid .panel + .panel { margin-top: 0; }
+    .track { display: grid; grid-template-columns: minmax(0, 1fr) 5.5rem; align-items: center; gap: .25rem .45rem; }
+    .track-title { min-width: 0; }
+    .track-title, .level-actions { grid-column: 1 / -1; }
+    .focus { min-height: 2rem; max-width: 100%; overflow: hidden; border-radius: .35rem; padding: .1rem .25rem; background: transparent; color: var(--text); font-size: 1em; font-weight: 700; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+    .focus:hover, .focus:focus-visible { outline: 2px solid var(--accent); background: #273035; }
+    .value { font-size: clamp(2.5rem, 10vw, 4rem); font-weight: 700; letter-spacing: -.06em; }
+    .unit { color: var(--muted); font-size: .8rem; letter-spacing: normal; }
+    .slider { appearance: none; width: 100%; height: .85rem; margin: 1rem 0; border-radius: 10rem; background: linear-gradient(90deg, transparent 0 49.4%, #101416 49.4% 50.6%, transparent 50.6%), repeating-linear-gradient(90deg, transparent 0 calc(10% - 1px), #1b2428 calc(10% - 1px) 10%), linear-gradient(90deg, var(--accent) 0 72%, #495157 72%); }
+    .slider::-webkit-slider-thumb { appearance: none; width: 2.7rem; height: 2.7rem; border-radius: 50%; background: var(--text); border: .4rem solid var(--accent); }
+    .level-actions { display: grid; grid-template-columns: minmax(0, 1fr) 5.5rem; gap: .45rem; align-items: center; }
+    .level-actions .slider { margin: 0; }
+    .mute { min-width: 0; min-height: 2.8rem; border-radius: .45rem; background: #343c42; font-size: 1em; font-weight: 700; }
+    .mute[aria-pressed="true"] { background: var(--danger); color: #300b0b; }
+    .empty, .notice { color: var(--muted); text-align: center; padding: 2rem 1rem; }
+    .notice { color: var(--warning); }
+    .state-message { display: none; }
+    .main-layout.empty .panel { display: none; }
+    .main-layout.empty .state-message { display: block; grid-column: 1 / -1; }
+    .toast { display: none; position: fixed; z-index: 2; top: .75rem; left: 50%; max-width: calc(100vw - 2rem); transform: translateX(-50%); border-radius: .45rem; padding: .7rem 1rem; background: var(--danger); color: #300b0b; font-weight: 700; box-shadow: 0 .5rem 1.5rem #0008; }
+    .toast.show { display: block; }
+
+    .settings { min-width: 3rem; min-height: 3rem; border-radius: .45rem; background: var(--surface-strong); font-size: 1.3em; }
+
+    .screen { display: none; }
+    .screen.active { display: block; }
+    .settings-row { min-height: 4.5rem; padding: .75rem 0; border-bottom: 1px solid #3a4349; }
+    .settings-row:last-child { border: 0; }
+    .setting-copy { display: grid; gap: .2rem; }
+    .setting-copy small { color: var(--muted); }
+    .toggle { min-width: 4.6rem; min-height: 2.8rem; border-radius: 2rem; background: #3b444a; padding: .25rem; text-align: right; }
+    .toggle::before { content: "Off"; float: left; margin: .45rem 0 0 .35rem; color: var(--muted); font-size: .78em; }
+    .toggle::after { content: ""; display: inline-block; width: 2.15rem; height: 2.15rem; border-radius: 50%; background: var(--text); vertical-align: middle; }
+    .toggle[aria-pressed="true"] { background: var(--accent); }
+    .toggle[aria-pressed="true"]::before { content: "On"; color: #05231e; }
+    .toggle[aria-pressed="true"]::after { transform: translateX(-1.75rem); }
+    select { min-height: 2.7rem; max-width: 8rem; border: 0; border-radius: .55rem; padding: .3rem; background: var(--surface-strong); color: var(--text); }
+    .settings-actions { display: flex; align-items: center; gap: .35rem; }
+    .move { min-width: 2.5rem; min-height: 2.8rem; border-radius: .45rem; background: var(--surface-strong); }
+    .reset { min-height: 3.2rem; width: 100%; border-radius: .7rem; background: #41484d; }
+
+    @media (min-width: 48rem) {
+      .prototype { width: min(100%, 70rem); }
+    }
+
+    @media (max-width: 32rem) { .track-grid { grid-template-columns: 1fr; } }
+
+    @media (max-height: 34rem) {
+      .review-bar { display: none; }
+      .prototype { min-height: 100vh; padding: .75rem 1rem; }
+      .header { margin-bottom: .7rem; }
+      .groups { margin-bottom: .7rem; }
+      .panel { padding: .1rem .5rem; }
+      .slider { margin: .6rem 0; }
+      .mute { min-height: 2.8rem; }
+      .focus { min-height: 1.5rem; }
+    }
+
+    dialog { width: min(94vw, 36rem); border: 0; border-radius: .7rem; padding: 1rem; background: var(--surface); color: var(--text); box-shadow: 0 1rem 5rem #000b; }
+    dialog::backdrop { background: #000a; }
+    .focus-panel { display: grid; gap: 1rem; }
+    .focus-panel .slider { margin: .4rem 0; height: 1.1rem; }
+    .focus-panel .mute { min-height: 4rem; }
+  </style>
+</head>
+<body>
+  <nav class="review-bar" aria-label="Mockup state">
+    <button data-state="online" aria-pressed="true">Online</button>
+    <button data-state="muted" aria-pressed="false">Muted</button>
+    <button data-state="empty" aria-pressed="false">No controls</button>
+    <button data-state="offline" aria-pressed="false">Offline</button>
+    <button data-state="reconnecting" aria-pressed="false">Reconnecting</button>
+    <button data-state="error" aria-pressed="false">Command error</button>
+  </nav>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <main class="prototype">
+    <section id="main" class="screen active" aria-label="Main controls">
+      <header class="header">
+        <div><p class="eyebrow">Focusrite Controller</p><h1>Dashboard</h1></div>
+        <div class="header-actions"><p id="status" class="status"><span class="dot"></span>Connected</p><button class="settings" data-open="settings" aria-label="Open settings">⚙</button></div>
+      </header>
+
+      <div id="main-content" class="main-layout track-grid">
+        <section id="state-message" class="panel empty state-message"></section>
+        <section class="panel track" aria-label="KEF listening-path level">
+          <div class="track-title"><button class="focus" data-focus="KEF level">KEF level</button></div>
+          <div class="level-actions"><input class="slider" type="range" min="0" max="100" value="72" aria-label="KEF level"><button id="mute" class="mute" aria-pressed="false">Mute</button></div>
+        </section>
+        <section class="panel track" aria-label="Gaming laptop level">
+          <div class="track-title"><button class="focus" data-focus="Gaming laptop">Gaming laptop</button></div>
+          <div class="level-actions"><input class="slider" type="range" min="0" max="100" value="54" aria-label="Optical mix one level"><button class="mute" aria-pressed="false">Mute</button></div>
+        </section>
+        <section class="panel track" aria-label="Daily driver level">
+          <div class="track-title"><button class="focus" data-focus="Daily driver">Daily driver</button></div>
+          <div class="level-actions"><input class="slider" type="range" min="0" max="100" value="36" aria-label="Headphones level"><button class="mute" aria-pressed="false">Mute</button></div>
+        </section>
+      </div>
+    </section>
+
+    <section id="settings" class="screen" aria-label="Display settings">
+      <header class="header"><div><p class="eyebrow">Settings</p><h1>Display controls</h1></div><button class="secondary" data-open="main">Done</button></header>
+      <p class="notice">Changes organize this display only. They never change hardware.</p>
+      <p class="eyebrow">3 of 12 controls shown</p>
+      <section class="panel" aria-label="Control visibility and groups">
+        <div class="settings-row">
+          <div class="setting-copy"><strong>KEF level</strong><small>Dashboard item 1</small></div>
+          <div class="settings-actions"><button class="move" aria-label="Move KEF level up">↑</button><button class="move" aria-label="Move KEF level down">↓</button><button class="toggle" aria-pressed="true" aria-label="Show KEF level"></button></div>
+        </div>
+        <div class="settings-row">
+          <div class="setting-copy"><strong>Gaming laptop</strong><small>Dashboard item 2</small></div>
+          <div class="settings-actions"><button class="move" aria-label="Move Gaming laptop up">↑</button><button class="move" aria-label="Move Gaming laptop down">↓</button><button class="toggle" aria-pressed="true" aria-label="Show Gaming laptop"></button></div>
+        </div>
+        <div class="settings-row">
+          <div class="setting-copy"><strong>Daily driver</strong><small>Dashboard item 3</small></div>
+          <div class="settings-actions"><button class="move" aria-label="Move Daily driver up">↑</button><button class="move" aria-label="Move Daily driver down">↓</button><button class="toggle" aria-pressed="true" aria-label="Show Daily driver"></button></div>
+        </div>
+        <div class="settings-row">
+          <div class="setting-copy"><strong>Main monitor level</strong><small>Hidden</small></div>
+          <div class="settings-actions"><button class="toggle" aria-pressed="false" aria-label="Show Main monitor level"></button></div>
+        </div>
+        <div class="settings-row">
+          <div class="setting-copy"><strong>USB input</strong><small>Hidden</small></div>
+          <div class="settings-actions"><button class="toggle" aria-pressed="false" aria-label="Show USB input"></button></div>
+        </div>
+      </section>
+      <p class="notice">Create or edit linked groups in web UI or configuration import.</p>
+      <section class="panel"><button class="reset">Reset display organization</button></section>
+    </section>
+  </main>
+  <dialog id="focus-dialog">
+    <section class="focus-panel" aria-label="Focused control">
+      <header class="header"><div><p class="eyebrow">Focused control</p><h1 id="focus-title">KEF level</h1></div><button class="secondary" data-close-focus>Done</button></header>
+      <input class="slider" type="range" min="0" max="100" value="72" aria-label="Focused level">
+      <button class="mute" aria-pressed="false">Mute</button>
+    </section>
+  </dialog>
+
+  <script>
+    const content = document.querySelector('#main-content');
+    const status = document.querySelector('#status');
+    const mute = document.querySelector('#mute');
+    const stateMessage = document.querySelector('#state-message');
+    const toast = document.querySelector('#toast');
+    const stateCopy = {
+      online: ['Connected', ''], muted: ['Connected', ''], empty: ['Connected', 'empty'],
+      offline: ['Device offline', 'offline'], reconnecting: ['Reconnecting', 'reconnecting'],
+      error: ['Connected', 'error']
+    };
+    document.querySelectorAll('[data-state]').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('[data-state]').forEach(item => item.setAttribute('aria-pressed', 'false'));
+      button.setAttribute('aria-pressed', 'true');
+      const [label, mode] = stateCopy[button.dataset.state];
+      status.className = `status ${mode}`;
+      status.innerHTML = `<span class="dot"></span>${label}`;
+      content.classList.toggle('empty', ['empty', 'offline', 'reconnecting'].includes(mode));
+      stateMessage.textContent = mode === 'empty'
+        ? 'No controls in Main. Open Settings to show a control.'
+        : mode ? 'Controls become available after a confirmed snapshot.' : '';
+      toast.textContent = mode === 'error' ? 'KEF level not applied. Confirmed state unchanged.' : '';
+      toast.classList.toggle('show', mode === 'error');
+      document.querySelectorAll('.mute').forEach(item => {
+        item.setAttribute('aria-pressed', String(button.dataset.state === 'muted'));
+        item.textContent = button.dataset.state === 'muted' ? 'Muted' : 'Mute';
+      });
+    }));
+    document.querySelectorAll('[data-open]').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('.screen').forEach(screen => screen.classList.remove('active'));
+      document.querySelector(`#${button.dataset.open}`).classList.add('active');
+    }));
+    document.querySelectorAll('.toggle').forEach(button => button.addEventListener('click', () => {
+      button.setAttribute('aria-pressed', button.getAttribute('aria-pressed') !== 'true');
+    }));
+    document.querySelectorAll('.mute').forEach(button => button.addEventListener('click', () => {
+      const muted = button.getAttribute('aria-pressed') !== 'true';
+      button.setAttribute('aria-pressed', muted);
+      button.textContent = muted ? 'Muted' : 'Mute';
+    }));
+    const focusDialog = document.querySelector('#focus-dialog');
+    const openFocus = name => {
+      document.querySelector('#focus-title').textContent = name;
+      focusDialog.showModal();
+    };
+    document.querySelectorAll('[data-focus]').forEach(button => button.addEventListener('click', () => openFocus(button.dataset.focus)));
+    document.querySelectorAll('.track').forEach(card => card.addEventListener('click', event => {
+      if (event.target.closest('input, .mute, [data-focus]')) return;
+      openFocus(card.querySelector('[data-focus]').dataset.focus);
+    }));
+    document.querySelector('[data-close-focus]').addEventListener('click', () => focusDialog.close());
+    const preview = new URLSearchParams(location.search);
+    const previewScreen = preview.get('screen');
+    if (previewScreen && document.querySelector(`#${previewScreen}`)) {
+      document.querySelectorAll('.screen').forEach(screen => screen.classList.remove('active'));
+      document.querySelector(`#${previewScreen}`).classList.add('active');
+    }
+    const previewState = preview.get('state');
+    if (previewState) document.querySelector(`[data-state="${previewState}"]`)?.click();
+    if (preview.has('focus')) openFocus(preview.get('focus'));
+  </script>
+</body>
+</html>
