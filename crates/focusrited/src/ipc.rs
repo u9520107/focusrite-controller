@@ -162,19 +162,25 @@ fn read_client(client: &mut Client, worker: &Arc<DeviceWorker>, instance_id: &st
     if client.input.contains(&b'\n') {
         return true;
     }
+    if client.input.len() > MAX_MESSAGE_BYTES {
+        return client.reject("message_too_large");
+    }
     let mut bytes = [0; 4096];
     match client.stream.read(&mut bytes) {
         Ok(0) => return false,
         Ok(count) => {
             client.input.extend_from_slice(&bytes[..count]);
-            if client.input.len() > MAX_MESSAGE_BYTES {
-                return client.reject("message_too_large");
-            }
         }
         Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
         Err(_) => return false,
     }
-    process_requests(client, worker, instance_id, &mut remaining)
+    if !process_requests(client, worker, instance_id, &mut remaining) {
+        return false;
+    }
+    if !client.input.contains(&b'\n') && client.input.len() > MAX_MESSAGE_BYTES {
+        return client.reject("message_too_large");
+    }
+    true
 }
 
 fn process_requests(
@@ -206,6 +212,9 @@ fn process_requests(
             }
         }
         *remaining -= 1;
+        if client.closing {
+            return true;
+        }
     }
     true
 }
@@ -267,6 +276,9 @@ fn flush_client(client: &mut Client) -> bool {
 
 fn broadcast(clients: &mut [Client], message: Outbound) {
     for client in clients {
+        if client.closing {
+            continue;
+        }
         if !client.queue(message.clone()) {
             client.closing = true;
         }
@@ -692,6 +704,34 @@ mod tests {
         let mut clients = vec![full_client];
         broadcast(&mut clients, event(3));
         assert!(clients[0].closing);
+        let queued = clients[0].outbound_bytes;
+        broadcast(&mut clients, event(4));
+        assert_eq!(clients[0].outbound_bytes, queued);
+    }
+
+    #[test]
+    fn reply_overflow_stops_remaining_commands() {
+        let (server, worker, _) = server();
+        let (stream, _peer) = UnixStream::pair().unwrap();
+        let mut client = Client::new(stream);
+        client.outbound_bytes = MAX_OUTBOUND_BYTES;
+        client.input = b"{\"v\":1,\"type\":\"command\",\"control\":\"output.level\",\"value\":{\"type\":\"integer\",\"value\":60}}\n{\"v\":1,\"type\":\"command\",\"control\":\"output.level\",\"value\":{\"type\":\"integer\",\"value\":80}}\n".to_vec();
+        let mut remaining = REQUEST_BATCH_LIMIT;
+
+        assert!(process_requests(
+            &mut client,
+            &worker,
+            "test",
+            &mut remaining
+        ));
+        assert!(client.closing);
+        assert_eq!(
+            worker.state().unwrap().snapshot.values[&ControlId("output.level".into())],
+            Value::Integer(60)
+        );
+
+        server.stop();
+        worker.stop().unwrap();
     }
 
     #[test]
@@ -704,6 +744,31 @@ mod tests {
         assert!(read_client(&mut client, &worker, "test"));
         assert!(!client.closing);
         assert!(client.input.len() > MAX_MESSAGE_BYTES);
+
+        server.stop();
+        worker.stop().unwrap();
+    }
+
+    #[test]
+    fn completed_frame_does_not_count_against_next_partial_frame() {
+        let (server, worker, _) = server();
+        let (stream, mut peer) = UnixStream::pair().unwrap();
+        stream.set_nonblocking(true).unwrap();
+        let mut client = Client::new(stream);
+        let prefix = "{\"v\":1,\"type\":\"snapshot\",\"padding\":\"";
+        let suffix = "\"}";
+        let frame = format!(
+            "{prefix}{}{suffix}",
+            "x".repeat(MAX_MESSAGE_BYTES - 1 - prefix.len() - suffix.len())
+        );
+        let split = frame.len() - 4;
+        client.input = frame.as_bytes()[..split].to_vec();
+        peer.write_all(&frame.as_bytes()[split..]).unwrap();
+        peer.write_all(b"\n{\"v\":1,\"type\":\"snapshot\"").unwrap();
+
+        assert!(read_client(&mut client, &worker, "test"));
+        assert!(!client.closing);
+        assert!(client.input.len() < MAX_MESSAGE_BYTES);
 
         server.stop();
         worker.stop().unwrap();
