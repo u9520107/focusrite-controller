@@ -290,7 +290,7 @@ fn write_boolean(card: &str, control: &ControlId, value: bool) -> Result<(), Dev
     let numid = control
         .0
         .strip_prefix("alsa-numid:")
-        .and_then(|number| number.parse().ok())
+        .and_then(|number| number.parse::<u32>().ok())
         .ok_or(DeviceError::WriteDisabled)?;
     let hctl = HCtl::new(&format!("hw:{card}"), false).map_err(|_| DeviceError::Offline)?;
     hctl.load().map_err(|_| DeviceError::Offline)?;

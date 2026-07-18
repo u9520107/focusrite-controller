@@ -42,7 +42,7 @@ domains remain explicit but non-writable.
 Exit: mock and Solo-on-WSL tests cover supported control behavior, failure,
 disconnect/reconnect, and persistence; unsupported controls are explicit.
 
-## Phase 3: Pi compatibility verification — complete pending review and merge
+## Phase 3: Pi compatibility verification — complete
 
 Execution plan: [Phase 3 Pi compatibility plan](phases/phase-3-pi-compatibility.md).
 
@@ -52,9 +52,10 @@ target-only build, ALSA, USB, system-service, reboot, and unplug/replug issues.
 Cross-compilation may be introduced only if native Pi development demonstrates a
 real need.
 
-MR 1 and MR 2 are complete. MR 3 adds event-driven ALSA state reconciliation;
-GUI clients later cache state and cap rendering at 60 Hz. MR 4 validates
-lifecycle recovery and closes Phase 3.
+MRs 1–4 are merged and confirmed. Native Pi evidence covers bounded
+read-only discovery, event-driven reconciliation, physical unplug/replug, and
+post-reboot daemon startup. GUI clients later cache state and cap rendering at
+60 Hz.
 
 Before adding Phase 3 hardware coverage, split Solo tests into a read-only
 hardware suite (discovery, external changes, reconnect) and a write-capable
@@ -65,6 +66,8 @@ Exit: Solo service runs reliably on prepared Pi; target-specific limits and
 deployment prerequisites are recorded.
 
 ## Phase 4a: Local touchscreen — planned
+
+Execution plan: [Phase 4a local touchscreen plan](phases/phase-4a-local-touchscreen.md).
 
 Implement versioned Unix-socket snapshot, command, and event messages, then
 build fullscreen Rust touch UI using only that local API. Start with main

@@ -3,6 +3,7 @@
 //! Linux/ALSA adapters and client transports sit outside this module.  Keeping
 //! the policy here makes discovery and state rules testable without hardware.
 
+pub mod ipc;
 pub mod profile_store;
 pub mod scarlett2_alsa;
 pub mod startup;
@@ -10,10 +11,12 @@ pub mod worker;
 
 use std::{collections::BTreeMap, thread, time::Duration};
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
+#[serde(transparent)]
 pub struct ControlId(pub String);
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Value {
     Bool(bool),
     Integer(i32),
@@ -21,7 +24,8 @@ pub enum Value {
     Array(Vec<Value>),
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ValueDomain {
     Boolean,
     Integer,
@@ -30,7 +34,7 @@ pub enum ValueDomain {
     Array,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct ControlCapability {
     pub id: ControlId,
     pub domain: ValueDomain,
@@ -40,7 +44,7 @@ pub struct ControlCapability {
     pub maximum: Option<i32>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
 pub struct DeviceSnapshot {
     /// Opaque adapter-provided identity. Profiles never cross this boundary.
     pub device_id: String,

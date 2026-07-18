@@ -2,9 +2,9 @@
 
 ## Status
 
-Complete pending review and merge. Target is prepared Pi OS ARM64 with Scarlett
-Solo 4th Gen connected directly by USB. Phase 2 WSL evidence remains valid
-only for its WSL scope.
+Complete. MRs 1–4 are merged and confirmed. Target is prepared Pi OS ARM64
+with Scarlett Solo 4th Gen connected directly by USB. Phase 2 WSL evidence
+remains valid only for its WSL scope.
 
 ## Goal
 
@@ -258,7 +258,7 @@ No daemon ALSA write, routing, clock, reset, firmware, or profile apply.
 Physical cable unplug/replug and Pi reboot each require explicit session
 approval. No ALSA write, routing, clock, reset, firmware, or profile apply.
 
-**Evidence — 2026-07-17 (in progress)**
+**Evidence — 2026-07-17 (complete)**
 
 - With explicit approval, the read-only `reconnects_after_solo_disconnect` test
   observed Solo offline at revision 3, then a fresh online snapshot at revision
@@ -270,6 +270,9 @@ approval. No ALSA write, routing, clock, reset, firmware, or profile apply.
 - With explicit approval, Pi rebooted successfully. Post-reboot read-only
   `discovers_attached_solo` passed on card `Gen`; five-second `focusrited`
   startup received no command and left its disposable profile store empty.
+- MRs 1–4 were merged and confirmed after their recorded checks and hardware
+  sessions. Phase 3 is closed; no device-state mutation was required for its
+  final lifecycle evidence.
 
 ## Exit checks
 
