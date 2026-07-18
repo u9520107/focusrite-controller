@@ -2,9 +2,11 @@
 
 ## Status
 
-MR 1 is ready for review and merge on `phase-4a-ipc`. Mock verification and
-Pi read-only socket smoke validation are complete. Phase 3 is complete. Do not
-begin UI implementation until local API review is accepted.
+MR 1 is merged as `4698fcf` on `main`. Mock verification and Pi read-only
+socket smoke validation are complete. Next proposed work is MR 2a: add the
+small capability-presentation contract required for a generic touchscreen.
+Do not begin client or live-control implementation until this proposal and the
+target display/toolkit decision are accepted.
 
 ## Goal
 
@@ -72,7 +74,7 @@ operation.
 Read-only Pi socket smoke test only. Any touchscreen display work or hardware
 write needs separate explicit approval.
 
-**Evidence — 2026-07-17 (in progress)**
+**Evidence — 2026-07-17 (complete)**
 
 - With explicit approval, `focusrited` started on Pi against ALSA ID `Gen`
   using disposable socket and profile-store paths. A local `v1` snapshot
@@ -86,30 +88,87 @@ write needs separate explicit approval.
   snapshots, external worker events, two-client convergence, event coalescing,
   slow-client queue overflow, and bounded per-client request turns.
 
-### MR 2: Fullscreen touch client and primary controls
+- After merge, `cargo fmt --check`, `cargo clippy --workspace --all-targets --
+  -D warnings`, and `cargo test --workspace` passed. The test suite has 32
+  passing non-hardware tests; three Pi hardware tests remain ignored because
+  they require attached hardware. Unix-socket tests require an environment
+  permitted to bind local sockets; they passed outside this development sandbox.
+
+### MR 2a proposal: Capability presentation contract
+
+**Why first**
+
+MR 1 exposes opaque control IDs, value domains, and bounds. That is sufficient
+for safe commands, but not for a capability-only UI: it cannot derive a safe
+display label, order, writable primary role, or integer increment. Choosing
+controls by ID in the client would break the no-device-specific-UI rule.
 
 **Scope**
 
-- Add smallest Rust touchscreen executable using MR 1 API only. Select UI
-  toolkit after confirming it builds and runs fullscreen on target Pi and fits
-  actual screen resolution/orientation; do not add a web stack.
-- Render connection/device status plus capability-discovered writable primary
-  monitor/output controls. Prefer daemon-provided metadata; never hardcode
-  Solo control IDs or channel count.
-- Use large touch targets, show confirmed values, rate-limit rendering to
-  60 Hz, and resync from snapshot after reconnect or event gap. Controls absent
-  from capabilities remain absent, not disabled guesses.
+- Add compact optional presentation data to each adapter-discovered capability
+  and serialize it in existing snapshot/event messages. Keep current wire
+  fields and semantics unchanged.
+- Presentation data is declarative: display label, group, ordering, and a
+  generic proven role (`main_output_level` or `main_output_mute`). Adapter maps
+  ALSA controls to roles; client never maps device IDs or labels itself.
+- For writable integer controls, expose an adapter-declared positive step. Do
+  not infer a step from current value. Bool controls need no step; values with
+  no usable presentation remain hidden from first UI.
+- Start with only `main` group and declared main roles. No mixer, inputs,
+  advanced controls, user labels, linked groups, profile actions, or preferences.
+- Add mock tests proving snapshots/events preserve presentation data and client
+  selection needs no device control ID.
+
+**Non-goals**
+
+- No new command type, write path, toolkit, executable, metadata persistence,
+  or hardware action.
+- No display strings guessed from opaque IDs. If Solo discovery cannot prove a
+  role or sensible increment, omit control and record gap.
+
+**Acceptance**
+
+- Mock snapshot identifies zero or more primary level/mute controls entirely
+  from capability data.
+- Existing IPC v1 clients remain compatible because fields are additive.
+- Full Rust verification passes; no Pi interaction required.
+
+### MR 2b proposal: Fullscreen touch client and primary controls
+
+**Scope**
+
+- Add one `focusrite-ui` Rust executable using MR 1 API only. It reconnects to
+  configured Unix socket, discards cache on changed `instance_id` or revision
+  gap, and requests snapshot before rendering controls.
+- Render connection/device status and only writable, available controls from
+  MR 2a `main` group. Render absent/unsupported controls nowhere, not disabled
+  guesses. Confirmed snapshot/event values are only displayed values; no
+  optimistic state remains after reply/error.
+- First layout: one status area, one level control, one mute control. Use native
+  large touch targets. Cap event redraws at 60 Hz; gestures send at most 30
+  commands/second, retaining newest pending value.
+- Toolkit decision gate: first run no-control fullscreen spike on actual Pi
+  display. Compare `egui/eframe` and `gtk4` only for Pi build, fullscreen/kiosk,
+  touch input, binary/runtime size, and needed system packages. Pick one; do
+  not add both or web stack. Record resolution, orientation, compositor, and
+  selected toolkit before client-control code starts.
+- UI disconnect/crash/restart must not alter daemon/device state. UI never
+  accesses ALSA, USB, or profiles.
 
 **Verification**
 
-- MR 1 checks plus UI unit/mock API tests.
-- Pi fullscreen launch, touch hit-target/screen-fit check, client kill/restart,
-  and daemon continuity check.
-- Any command test uses mock device first; live writes require explicit approval.
+- MR 1 checks plus deterministic mock-server tests for initial snapshot,
+  reconnect, changed instance, revision gap, malformed reply, event coalescing,
+  confirmed command/error rendering, and 30-command/sec gesture bound.
+- Pi fullscreen launch and read-only touch/screen-fit check, then client
+  kill/restart and daemon continuity check. Record runtime facts without IDs.
+- Command tests use mock device first. Live control write needs separate
+  explicit approval and reviewed reversible procedure.
 
 **Hardware action**
 
-Display and touch interaction. Live control write only with explicit approval.
+Display and touch interaction. Read-only fullscreen test needs explicit
+approval. Live control write needs separate explicit approval.
 
 ### MR 3: Local profile workflow
 

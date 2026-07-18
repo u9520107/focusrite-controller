@@ -65,15 +65,16 @@ ignored tests cannot mutate hardware accidentally.
 Exit: Solo service runs reliably on prepared Pi; target-specific limits and
 deployment prerequisites are recorded.
 
-## Phase 4a: Local touchscreen — planned
+## Phase 4a: Local touchscreen — in progress
 
 Execution plan: [Phase 4a local touchscreen plan](phases/phase-4a-local-touchscreen.md).
 
-Implement versioned Unix-socket snapshot, command, and event messages, then
-build fullscreen Rust touch UI using only that local API. Start with main
-monitor/output controls; add capability groups after hardware and screen-fit
-validation. Add local profile save/list, binding/diff dry-run, reviewed apply,
-and per-control applied/skipped/failed results.
+MR 1 provides merged versioned Unix-socket snapshot, command, and event
+messages. Next proposed slice, MR 2a, adds capability presentation metadata so
+touchscreen selects primary controls without device-specific IDs. MR 2b then
+builds smallest fullscreen client using local API only. Add capability groups
+only after screen-fit validation. Local profile workflow remains MR 3:
+save/list, binding/diff dry-run, reviewed apply, and per-control results.
 
 Exit: hardware controller works from Pi display; touchscreen-client crash does
 not affect daemon; mock IPC tests cover command ordering, reconnect, and
