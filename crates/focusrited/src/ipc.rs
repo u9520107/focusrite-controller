@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     ControlId, DeviceSnapshot, ServiceError, Value, dashboard_store::DashboardConfig,
-    worker::DeviceWorker,
+    groups::GroupResult, worker::DeviceWorker,
 };
 
 const PROTOCOL_VERSION: u8 = 1;
@@ -240,6 +240,15 @@ fn handle_request(
             },
             _ => error_message("invalid_command"),
         },
+        "group_command" => match (request.group, request.position) {
+            (Some(group), Some(position)) => {
+                match worker.command_level_group(group.clone(), position) {
+                    Ok((state, result)) => group_state_message(instance_id, state, group, result),
+                    Err(error) => error_message(service_error(error)),
+                }
+            }
+            _ => error_message("invalid_group_command"),
+        },
         _ => error_message("unknown_message_type"),
     };
     if client.queue(Outbound::Reply(message)) {
@@ -383,6 +392,8 @@ struct Request {
     kind: String,
     control: Option<String>,
     value: Option<Value>,
+    group: Option<String>,
+    position: Option<u16>,
 }
 
 #[derive(Clone, Serialize)]
@@ -402,6 +413,23 @@ struct Response {
     dashboard: Option<DashboardConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group_result: Option<GroupCommandResult>,
+}
+
+#[derive(Clone, Serialize)]
+struct GroupCommandResult {
+    group: String,
+    applied: Vec<ControlId>,
+    skipped: Vec<ControlId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failed: Option<GroupFailure>,
+}
+
+#[derive(Clone, Serialize)]
+struct GroupFailure {
+    control: ControlId,
+    error: &'static str,
 }
 
 fn state_message(instance_id: &str, kind: &'static str, state: crate::worker::State) -> Response {
@@ -414,6 +442,7 @@ fn state_message(instance_id: &str, kind: &'static str, state: crate::worker::St
         snapshot: Some(state.snapshot),
         dashboard: Some(state.dashboard),
         error: None,
+        group_result: None,
     }
 }
 
@@ -427,12 +456,48 @@ fn error_message(error: &'static str) -> Response {
         snapshot: None,
         dashboard: None,
         error: Some(error),
+        group_result: None,
+    }
+}
+
+fn group_state_message(
+    instance_id: &str,
+    state: crate::worker::State,
+    group: String,
+    result: GroupResult,
+) -> Response {
+    let mut response = state_message(instance_id, "group_command_result", state);
+    response.group_result = Some(GroupCommandResult {
+        group,
+        applied: result.applied,
+        skipped: result.skipped,
+        failed: result.failed.map(|(control, error)| GroupFailure {
+            control,
+            error: group_service_error(error),
+        }),
+    });
+    response
+}
+
+fn group_service_error(error: ServiceError) -> &'static str {
+    match error {
+        ServiceError::Device(_) => "device_error",
+        ServiceError::UnknownControl => "unknown_control",
+        ServiceError::Unavailable => "unavailable",
+        ServiceError::ReadOnly => "read_only",
+        ServiceError::InvalidValue => "invalid_value",
+        ServiceError::UnconfirmedWrite => "unconfirmed_write",
+        ServiceError::UnknownProfile | ServiceError::ProfileBindingMismatch => {
+            "unsupported_command"
+        }
     }
 }
 
 fn service_error(error: crate::worker::WorkerError) -> &'static str {
     match error {
         crate::worker::WorkerError::Dashboard(_) => "dashboard_invalid",
+        crate::worker::WorkerError::Group(_) => "invalid_group_command",
+        crate::worker::WorkerError::UnknownGroup => "unknown_group",
         crate::worker::WorkerError::Stopped => "worker_stopped",
         crate::worker::WorkerError::Service(ServiceError::Device(_)) => "device_error",
         crate::worker::WorkerError::Service(ServiceError::UnknownControl) => "unknown_control",
@@ -456,6 +521,8 @@ mod tests {
     use super::*;
     use crate::{
         ControlCapability, ControlPresentation, Device, DeviceError, PresentationKind, ValueDomain,
+        dashboard_store::{DashboardControl, DashboardLevelGroup},
+        profile_store::Profiles,
     };
 
     struct MockDevice(DeviceSnapshot);
@@ -510,6 +577,7 @@ mod tests {
                     available: true,
                     minimum: Some(0),
                     maximum: Some(100),
+                    group: None,
                     presentation: Some(ControlPresentation {
                         label: "KEF level".into(),
                         kind: PresentationKind::Level,
@@ -549,6 +617,7 @@ mod tests {
                         available: true,
                         minimum: Some(0),
                         maximum: Some(100),
+                        group: None,
                         presentation: None,
                     }],
                     values: BTreeMap::from([(control, Value::Integer(50))]),
@@ -567,6 +636,82 @@ mod tests {
         ));
         let server = LocalServer::start(Arc::clone(&worker), path.clone()).unwrap();
         (server, worker, path, event_ready)
+    }
+
+    fn group_server() -> (LocalServer, Arc<DeviceWorker>, PathBuf) {
+        let first = ControlId("output.level".into());
+        let second = ControlId("optical.level".into());
+        let worker = Arc::new(
+            DeviceWorker::start_with_dashboard(
+                MockDevice(DeviceSnapshot {
+                    device_id: "mock-device".into(),
+                    capability_schema: "mock-v1".into(),
+                    capabilities: vec![
+                        ControlCapability {
+                            id: first.clone(),
+                            domain: ValueDomain::Integer,
+                            writable: true,
+                            available: true,
+                            minimum: Some(0),
+                            maximum: Some(100),
+                            group: Some(crate::GroupCapability {
+                                operation: crate::GroupOperation::RelativeLevel,
+                            }),
+                            presentation: Some(ControlPresentation {
+                                label: "Output level".into(),
+                                kind: PresentationKind::Level,
+                                default_dashboard_order: Some(1),
+                                companion: None,
+                                step: None,
+                            }),
+                        },
+                        ControlCapability {
+                            id: second.clone(),
+                            domain: ValueDomain::Integer,
+                            writable: true,
+                            available: true,
+                            minimum: Some(0),
+                            maximum: Some(100),
+                            group: Some(crate::GroupCapability {
+                                operation: crate::GroupOperation::RelativeLevel,
+                            }),
+                            presentation: None,
+                        },
+                    ],
+                    values: BTreeMap::from([
+                        (first.clone(), Value::Integer(50)),
+                        (second.clone(), Value::Integer(25)),
+                    ]),
+                }),
+                Profiles::new(),
+                Some(DashboardConfig {
+                    version: 2,
+                    device_id: "mock-device".into(),
+                    capability_schema: "mock-v1".into(),
+                    controls: vec![DashboardControl {
+                        id: first.clone(),
+                        label: None,
+                    }],
+                    level_groups: vec![DashboardLevelGroup {
+                        id: "linked".into(),
+                        label: "Linked".into(),
+                        members: vec![first.clone(), second],
+                        anchor: first,
+                    }],
+                }),
+            )
+            .unwrap(),
+        );
+        let path = std::env::temp_dir().join(format!(
+            "focusrited-ipc-group-test-{}-{}.sock",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let server = LocalServer::start(Arc::clone(&worker), path.clone()).unwrap();
+        (server, worker, path)
     }
 
     fn read_json(reader: &mut BufReader<UnixStream>) -> serde_json::Value {
@@ -613,6 +758,34 @@ mod tests {
         let result = read_type(&mut reader, "command_result");
         assert_eq!(result["revision"], 2);
         assert_eq!(result["snapshot"]["values"]["output.level"]["value"], 75);
+
+        server.stop();
+        worker.stop().unwrap();
+    }
+
+    #[test]
+    fn group_commands_return_confirmed_member_results() {
+        let (server, worker, path) = group_server();
+        let mut stream = UnixStream::connect(&path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let _ = read_type(&mut reader, "snapshot");
+
+        stream
+            .write_all(
+                b"{\"v\":1,\"type\":\"group_command\",\"group\":\"linked\",\"position\":750}\n",
+            )
+            .unwrap();
+        let result = read_type(&mut reader, "group_command_result");
+        assert_eq!(result["group_result"]["group"], "linked");
+        assert_eq!(
+            result["group_result"]["applied"],
+            serde_json::json!(["output.level", "optical.level"])
+        );
+        assert_eq!(result["snapshot"]["values"]["output.level"]["value"], 75);
+        assert_eq!(result["snapshot"]["values"]["optical.level"]["value"], 50);
 
         server.stop();
         worker.stop().unwrap();
@@ -694,6 +867,7 @@ mod tests {
                 snapshot: None,
                 dashboard: None,
                 error: None,
+                group_result: None,
             })
         };
         assert!(client.queue(event(1)));
@@ -716,6 +890,7 @@ mod tests {
                 snapshot: None,
                 dashboard: None,
                 error: None,
+                group_result: None,
             })
         };
         while client.queue(large_reply()) {}
@@ -815,6 +990,7 @@ mod tests {
             snapshot: None,
             dashboard: None,
             error: None,
+            group_result: None,
         })));
         assert!(client.reject("malformed_message"));
         assert!(client.has_pending_output());

@@ -10,7 +10,7 @@ use std::{
 };
 
 use crate::{
-    ControlId, Device, DeviceSnapshot, Service, ServiceError, Value,
+    ControlId, Device, DeviceSnapshot, GroupError, GroupResult, Service, ServiceError, Value,
     dashboard_store::DashboardConfig, profile_store::Profiles,
 };
 
@@ -30,6 +30,8 @@ pub struct State {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WorkerError {
     Dashboard(String),
+    Group(GroupError),
+    UnknownGroup,
     Service(ServiceError),
     Stopped,
 }
@@ -38,6 +40,8 @@ impl std::fmt::Display for WorkerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Dashboard(error) => write!(formatter, "dashboard configuration: {error}"),
+            Self::Group(error) => write!(formatter, "group command: {error:?}"),
+            Self::UnknownGroup => formatter.write_str("unknown dashboard group"),
             Self::Service(error) => write!(formatter, "service error: {error:?}"),
             Self::Stopped => formatter.write_str("device worker stopped"),
         }
@@ -58,6 +62,11 @@ enum Request {
         control: ControlId,
         value: Value,
         reply: std::sync::mpsc::Sender<Result<State, ServiceError>>,
+    },
+    LevelGroup {
+        group: String,
+        position: u16,
+        reply: std::sync::mpsc::Sender<Result<(State, GroupResult), WorkerError>>,
     },
     Stop(std::sync::mpsc::Sender<()>),
 }
@@ -147,6 +156,23 @@ impl DeviceWorker {
             .map_err(WorkerError::Service)
     }
 
+    /// Executes one configured group command through serial device ownership.
+    pub fn command_level_group(
+        &self,
+        group: String,
+        position: u16,
+    ) -> Result<(State, GroupResult), WorkerError> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.sender
+            .send(Request::LevelGroup {
+                group,
+                position,
+                reply: sender,
+            })
+            .map_err(|_| WorkerError::Stopped)?;
+        receiver.recv().map_err(|_| WorkerError::Stopped)?
+    }
+
     pub fn stop(&self) -> Result<(), WorkerError> {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.sender
@@ -220,6 +246,24 @@ fn handle_request<D: Device>(
                     .map(|_| state(service, dashboard)),
             );
         }
+        Request::LevelGroup {
+            group,
+            position,
+            reply,
+        } => {
+            let result = dashboard
+                .level_groups
+                .iter()
+                .find(|item| item.id == group)
+                .ok_or(WorkerError::UnknownGroup)
+                .and_then(|group| {
+                    service
+                        .command_level_group(&group.level_group(), position)
+                        .map_err(WorkerError::Group)
+                })
+                .map(|result| (state(service, dashboard), result));
+            let _ = reply.send(result);
+        }
         Request::Stop(reply) => {
             let _ = reply.send(());
             return false;
@@ -248,7 +292,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::{ControlCapability, DeviceError, ValueDomain};
+    use crate::{
+        ControlCapability, DeviceError, GroupCapability, GroupOperation, ValueDomain,
+        dashboard_store::DashboardLevelGroup, profile_store::Profiles,
+    };
 
     struct MockDevice(DeviceSnapshot);
 
@@ -328,6 +375,7 @@ mod tests {
                 available: true,
                 minimum: Some(0),
                 maximum: Some(100),
+                group: None,
                 presentation: None,
             }],
             values: BTreeMap::from([(volume.clone(), Value::Integer(50))]),
@@ -338,6 +386,71 @@ mod tests {
 
         assert_eq!(state.snapshot.values[&volume], Value::Integer(75));
         assert_eq!(state.revision, 2);
+        worker.stop().unwrap();
+    }
+
+    #[test]
+    fn serial_worker_confirms_configured_group() {
+        let first = ControlId("output.volume".into());
+        let second = ControlId("optical.volume".into());
+        let snapshot = DeviceSnapshot {
+            device_id: "mock-device".into(),
+            capability_schema: "mock-v1".into(),
+            capabilities: vec![
+                ControlCapability {
+                    id: first.clone(),
+                    domain: ValueDomain::Integer,
+                    writable: true,
+                    available: true,
+                    minimum: Some(0),
+                    maximum: Some(100),
+                    group: Some(GroupCapability {
+                        operation: GroupOperation::RelativeLevel,
+                    }),
+                    presentation: None,
+                },
+                ControlCapability {
+                    id: second.clone(),
+                    domain: ValueDomain::Integer,
+                    writable: true,
+                    available: true,
+                    minimum: Some(0),
+                    maximum: Some(100),
+                    group: Some(GroupCapability {
+                        operation: GroupOperation::RelativeLevel,
+                    }),
+                    presentation: None,
+                },
+            ],
+            values: BTreeMap::from([
+                (first.clone(), Value::Integer(50)),
+                (second.clone(), Value::Integer(25)),
+            ]),
+        };
+        let dashboard = DashboardConfig {
+            version: 2,
+            device_id: "mock-device".into(),
+            capability_schema: "mock-v1".into(),
+            controls: Vec::new(),
+            level_groups: vec![DashboardLevelGroup {
+                id: "linked".into(),
+                label: "Linked".into(),
+                members: vec![first.clone(), second.clone()],
+                anchor: first.clone(),
+            }],
+        };
+        let worker = DeviceWorker::start_with_dashboard(
+            MockDevice(snapshot),
+            Profiles::new(),
+            Some(dashboard),
+        )
+        .unwrap();
+
+        let (state, result) = worker.command_level_group("linked".into(), 750).unwrap();
+
+        assert_eq!(result.applied, vec![first.clone(), second.clone()]);
+        assert_eq!(state.snapshot.values[&first], Value::Integer(75));
+        assert_eq!(state.snapshot.values[&second], Value::Integer(50));
         worker.stop().unwrap();
     }
 

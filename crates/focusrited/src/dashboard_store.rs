@@ -9,9 +9,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ControlId, DeviceSnapshot, PresentationKind};
+use crate::{ControlId, DeviceSnapshot, PresentationKind, groups::LevelGroup};
 
-pub const DASHBOARD_CONFIG_VERSION: u8 = 1;
+pub const DASHBOARD_CONFIG_VERSION: u8 = 2;
 pub const DASHBOARD_LIMIT: usize = 12;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -20,6 +20,8 @@ pub struct DashboardConfig {
     pub device_id: String,
     pub capability_schema: String,
     pub controls: Vec<DashboardControl>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub level_groups: Vec<DashboardLevelGroup>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -27,6 +29,24 @@ pub struct DashboardControl {
     pub id: ControlId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+}
+
+/// Persisted virtual level track. Its members are discovered leaf controls.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardLevelGroup {
+    pub id: String,
+    pub label: String,
+    pub members: Vec<ControlId>,
+    pub anchor: ControlId,
+}
+
+impl DashboardLevelGroup {
+    pub fn level_group(&self) -> LevelGroup {
+        LevelGroup {
+            members: self.members.clone(),
+            anchor: self.anchor.clone(),
+        }
+    }
 }
 
 impl DashboardConfig {
@@ -54,19 +74,23 @@ impl DashboardConfig {
                 .take(DASHBOARD_LIMIT)
                 .map(|(_, id)| DashboardControl { id, label: None })
                 .collect(),
+            level_groups: Vec::new(),
         }
     }
 
     pub fn validate_for(&self, snapshot: &DeviceSnapshot) -> io::Result<()> {
-        if self.version != DASHBOARD_CONFIG_VERSION {
+        if self.version != 1 && self.version != DASHBOARD_CONFIG_VERSION {
             return invalid("unknown dashboard config version");
+        }
+        if self.version == 1 && !self.level_groups.is_empty() {
+            return invalid("dashboard groups require config version 2");
         }
         if self.device_id != snapshot.device_id
             || self.capability_schema != snapshot.capability_schema
         {
             return invalid("dashboard binding does not match device");
         }
-        if self.controls.len() > DASHBOARD_LIMIT {
+        if self.controls.len() + self.level_groups.len() > DASHBOARD_LIMIT {
             return invalid("dashboard exceeds control limit");
         }
         let mut ids = BTreeSet::new();
@@ -88,6 +112,19 @@ impl DashboardConfig {
             {
                 return invalid("dashboard control is unavailable");
             }
+        }
+        let mut group_ids = BTreeSet::new();
+        for group in &self.level_groups {
+            if group.id.trim().is_empty() || group.label.trim().is_empty() {
+                return invalid("dashboard group id or label is empty");
+            }
+            if !group_ids.insert(&group.id) {
+                return invalid("dashboard repeats group id");
+            }
+            group
+                .level_group()
+                .validate(&snapshot.capabilities)
+                .map_err(|error| invalid_error(format!("dashboard group is invalid: {error:?}")))?;
         }
         Ok(())
     }
@@ -170,6 +207,9 @@ mod tests {
                     available: true,
                     minimum: Some(0),
                     maximum: Some(100),
+                    group: Some(crate::GroupCapability {
+                        operation: crate::GroupOperation::RelativeLevel,
+                    }),
                     presentation: Some(ControlPresentation {
                         label: "Shown".into(),
                         kind: PresentationKind::Level,
@@ -185,6 +225,7 @@ mod tests {
                     available: true,
                     minimum: Some(0),
                     maximum: Some(184),
+                    group: None,
                     presentation: None,
                 },
             ],
@@ -200,14 +241,36 @@ mod tests {
         let store = DashboardStore::new(&path);
         let snapshot = snapshot();
         let config = DashboardConfig {
-            version: 1,
+            version: 2,
             device_id: "mock-device".into(),
             capability_schema: "mock-v1".into(),
             controls: vec![DashboardControl {
                 id: ControlId("shown".into()),
                 label: Some("KEF level".into()),
             }],
+            level_groups: vec![DashboardLevelGroup {
+                id: "linked-outputs".into(),
+                label: "KEF".into(),
+                members: vec![ControlId("shown".into()), ControlId("other".into())],
+                anchor: ControlId("shown".into()),
+            }],
         };
+        let mut snapshot = snapshot;
+        snapshot.capabilities.push(ControlCapability {
+            id: ControlId("other".into()),
+            domain: ValueDomain::Integer,
+            writable: true,
+            available: true,
+            minimum: Some(0),
+            maximum: Some(100),
+            group: Some(crate::GroupCapability {
+                operation: crate::GroupOperation::RelativeLevel,
+            }),
+            presentation: None,
+        });
+        snapshot
+            .values
+            .insert(ControlId("other".into()), Value::Integer(50));
         store.save(&config, &snapshot).unwrap();
         assert_eq!(store.load().unwrap(), Some(config));
         assert!(!path.with_extension("tmp").exists());
@@ -235,5 +298,31 @@ mod tests {
             config.validate_for(&snapshot).unwrap_err().kind(),
             io::ErrorKind::InvalidData
         );
+        config.device_id = "mock-device".into();
+        config.level_groups = vec![DashboardLevelGroup {
+            id: "bad".into(),
+            label: "Bad".into(),
+            members: vec![ControlId("shown".into()), ControlId("raw".into())],
+            anchor: ControlId("shown".into()),
+        }];
+        assert_eq!(
+            config.validate_for(&snapshot).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
+    #[test]
+    fn version_one_without_groups_remains_valid() {
+        let config: DashboardConfig = serde_json::from_str(
+            r#"{
+                "version": 1,
+                "device_id": "mock-device",
+                "capability_schema": "mock-v1",
+                "controls": [{"id":"shown"}]
+            }"#,
+        )
+        .unwrap();
+        assert!(config.level_groups.is_empty());
+        config.validate_for(&snapshot()).unwrap();
     }
 }

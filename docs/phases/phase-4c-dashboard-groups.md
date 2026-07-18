@@ -129,11 +129,23 @@ configuration through validated CLI import/export before Phase 5 web editing.
 - Core mock-only validation accepts two-or-more unique discovered writable
   integer leaf controls with declared bounds. It maps canonical `0..=1000`
   positions independently into unequal ranges and executes ordered,
-  per-member-confirmed service commands. It has no worker/IPC, persistence,
-  adapter declaration, or live hardware path yet.
-- Current `position` semantics are an absolute normalized target for every
-  member. Relative-balance preservation needs an explicit anchor/baseline rule;
-  do not persist or expose this operation until that contract exists.
+  per-member-confirmed service commands. It has no native adapter declaration
+  or live hardware path yet.
+- MR 2b defines relative-level behavior: each group names one member as its
+  anchor; a command target is anchor's canonical `0..=1000` position. Daemon
+  snapshots all members once, applies target-anchor delta to each normalized
+  member position, clamps only at `0`/`1000`, maps to native integer bounds,
+  then confirms writes in configured order. No-op members are reported skipped;
+  first failed write stops operation with no rollback. Clipping is explicit and
+  may change relative balance. Worker and local IPC return authoritative state
+  plus applied/skipped/failed member result.
+- Dashboard config schema v2 adds named level-group metadata while accepting
+  v1 files with no groups. Group import/export validates discovery and writes
+  no hardware; groups count toward the twelve visible dashboard-item limit.
+- Group membership now fails closed unless every member's adapter capability
+  explicitly declares `relative_level`. Current ALSA discovery declares none;
+  mock-only groups remain available for service, IPC, and UI coverage until an
+  adapter has reviewed level-control declarations.
 
 **Scope**
 

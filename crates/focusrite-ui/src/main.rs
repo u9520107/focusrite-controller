@@ -12,9 +12,9 @@ use std::{
 
 use eframe::egui;
 use focusrited::{
-    ControlCapability, ControlId, ControlPresentation, DeviceSnapshot, PresentationKind, Value,
-    ValueDomain,
-    dashboard_store::{DashboardConfig, DashboardControl},
+    ControlCapability, ControlId, ControlPresentation, DeviceSnapshot, GroupCapability,
+    GroupOperation, PresentationKind, Value, ValueDomain,
+    dashboard_store::{DashboardConfig, DashboardControl, DashboardLevelGroup},
 };
 use serde::Deserialize;
 
@@ -130,6 +130,19 @@ struct Response {
     snapshot: Option<DeviceSnapshot>,
     dashboard: Option<DashboardConfig>,
     error: Option<String>,
+    group_result: Option<GroupCommandResult>,
+}
+
+#[derive(Deserialize)]
+struct GroupCommandResult {
+    group: String,
+    failed: Option<GroupFailure>,
+}
+
+#[derive(Deserialize)]
+struct GroupFailure {
+    control: ControlId,
+    error: String,
 }
 
 enum SocketEvent {
@@ -142,6 +155,7 @@ enum SocketEvent {
 enum ReaderRequest {
     Snapshot,
     Command(ControlId, Value),
+    GroupCommand(String, u16),
 }
 
 fn write_request(writer: &mut UnixStream, request: ReaderRequest) -> std::io::Result<()> {
@@ -155,6 +169,19 @@ fn write_request(writer: &mut UnixStream, request: ReaderRequest) -> std::io::Re
                     "type": "command",
                     "control": control.0,
                     "value": value,
+                }),
+            )
+            .map_err(std::io::Error::other)?;
+            writer.write_all(b"\n")
+        }
+        ReaderRequest::GroupCommand(group, position) => {
+            serde_json::to_writer(
+                &mut *writer,
+                &serde_json::json!({
+                    "v": 1,
+                    "type": "group_command",
+                    "group": group,
+                    "position": position,
                 }),
             )
             .map_err(std::io::Error::other)?;
@@ -185,6 +212,8 @@ struct TouchscreenApp {
     demo_values: BTreeMap<ControlId, Value>,
     pending_commands: BTreeMap<ControlId, Value>,
     last_command: BTreeMap<ControlId, Instant>,
+    pending_groups: BTreeMap<String, u16>,
+    last_group_command: BTreeMap<String, Instant>,
     toast: Option<(String, Instant)>,
     debug: Option<DebugLog>,
 }
@@ -209,6 +238,7 @@ struct StripState<'a> {
     demo: bool,
     overrides: &'a mut BTreeMap<ControlId, Value>,
     pending_commands: &'a mut BTreeMap<ControlId, Value>,
+    pending_groups: &'a mut BTreeMap<String, u16>,
 }
 
 struct DashboardStrip<'a> {
@@ -270,6 +300,8 @@ impl TouchscreenApp {
             demo_values: BTreeMap::new(),
             pending_commands: BTreeMap::new(),
             last_command: BTreeMap::new(),
+            pending_groups: BTreeMap::new(),
+            last_group_command: BTreeMap::new(),
             toast: None,
             debug,
         }
@@ -303,6 +335,15 @@ impl TouchscreenApp {
             self.toast = Some((error, Instant::now()));
             return;
         }
+        let group_failure = response.group_result.as_ref().and_then(|result| {
+            result.failed.as_ref().map(|failure| {
+                format!(
+                    "{}: {} failed ({})",
+                    result.group, failure.control.0, failure.error
+                )
+            })
+        });
+        let group_result = response.kind == "group_command_result";
         let (Some(instance_id), Some(revision), Some(online), Some(snapshot), Some(dashboard)) = (
             response.instance_id,
             response.revision,
@@ -314,12 +355,13 @@ impl TouchscreenApp {
         };
         if !matches!(
             response.kind.as_str(),
-            "snapshot" | "event" | "command_result"
+            "snapshot" | "event" | "command_result" | "group_command_result"
         ) {
             return;
         }
         let resync = self.state.as_ref().is_some_and(|state| {
-            state.instance_id != instance_id || revision > state.revision.saturating_add(1)
+            state.instance_id != instance_id
+                || (!group_result && revision > state.revision.saturating_add(1))
         });
         if resync {
             self.state = None;
@@ -337,6 +379,9 @@ impl TouchscreenApp {
             dashboard,
         });
         self.connection = Connection::Connected;
+        if let Some(message) = group_failure {
+            self.toast = Some((message, Instant::now()));
+        }
     }
 
     fn flush_commands(&mut self) {
@@ -360,6 +405,22 @@ impl TouchscreenApp {
                 self.last_command.insert(control, now);
             }
         }
+        let groups = self
+            .pending_groups
+            .iter()
+            .filter(|(group, _)| command_due(self.last_group_command.get(*group), now))
+            .map(|(group, position)| (group.clone(), *position))
+            .collect::<Vec<_>>();
+        for (group, position) in groups {
+            if self.snapshot_sender.as_ref().is_some_and(|sender| {
+                sender
+                    .send(ReaderRequest::GroupCommand(group.clone(), position))
+                    .is_ok()
+            }) {
+                self.pending_groups.remove(&group);
+                self.last_group_command.insert(group, now);
+            }
+        }
     }
 
     fn lock(&mut self) {
@@ -368,6 +429,11 @@ impl TouchscreenApp {
         self.unlock_started = None;
         self.focus = None;
         self.pending_commands.clear();
+        self.pending_groups.clear();
+    }
+
+    fn has_pending_commands(&self) -> bool {
+        !self.pending_commands.is_empty() || !self.pending_groups.is_empty()
     }
 }
 
@@ -523,7 +589,8 @@ impl eframe::App for TouchscreenApp {
             return;
         }
         let controls = dashboard_controls(&state.snapshot, &state.dashboard);
-        if controls.is_empty() {
+        let groups = dashboard_groups(&state.snapshot, &state.dashboard);
+        if controls.is_empty() && groups.is_empty() {
             ui.centered_and_justified(|ui| ui.label("No dashboard controls available."));
             return;
         }
@@ -534,6 +601,7 @@ impl eframe::App for TouchscreenApp {
             demo: self.demo,
             overrides: &mut self.demo_values,
             pending_commands: &mut self.pending_commands,
+            pending_groups: &mut self.pending_groups,
         };
         for row in controls.chunks(2) {
             ui.horizontal(|ui| {
@@ -553,6 +621,27 @@ impl eframe::App for TouchscreenApp {
                                 card_height,
                                 &mut strip_state,
                                 &mut self.debug,
+                            );
+                        },
+                    );
+                }
+            });
+            ui.add_space(8.0);
+        }
+        for row in groups.chunks(2) {
+            ui.horizontal(|ui| {
+                for (group, anchor) in row {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(card_width, card_height),
+                        egui::Layout::top_down(egui::Align::Min),
+                        |ui| {
+                            group_strip(
+                                ui,
+                                group,
+                                anchor,
+                                &state.snapshot,
+                                card_height,
+                                &mut strip_state,
                             );
                         },
                     );
@@ -652,7 +741,7 @@ impl TouchscreenApp {
         } else if let Some(started) = self.unlock_started {
             next = Some(UNLOCK_TIMEOUT.saturating_sub(now.duration_since(started)));
         }
-        if !self.pending_commands.is_empty() {
+        if self.has_pending_commands() {
             next = Some(next.map_or(COMMAND_INTERVAL, |delay: Duration| {
                 delay.min(COMMAND_INTERVAL)
             }));
@@ -849,6 +938,72 @@ fn dashboard_controls<'a>(
         })
         .take(DASHBOARD_LIMIT)
         .collect()
+}
+
+fn dashboard_groups<'a>(
+    snapshot: &'a DeviceSnapshot,
+    dashboard: &'a DashboardConfig,
+) -> Vec<(&'a DashboardLevelGroup, &'a ControlCapability)> {
+    dashboard
+        .level_groups
+        .iter()
+        .filter_map(|group| {
+            snapshot
+                .capabilities
+                .iter()
+                .find(|capability| {
+                    capability.id == group.anchor
+                        && capability.available
+                        && capability.writable
+                        && capability.domain == ValueDomain::Integer
+                        && capability.minimum.is_some()
+                        && capability.maximum.is_some()
+                })
+                .map(|anchor| (group, anchor))
+        })
+        .take(DASHBOARD_LIMIT)
+        .collect()
+}
+
+fn group_strip(
+    ui: &mut egui::Ui,
+    group: &DashboardLevelGroup,
+    anchor: &ControlCapability,
+    snapshot: &DeviceSnapshot,
+    height: f32,
+    state: &mut StripState<'_>,
+) {
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(27, 34, 40))
+        .corner_radius(6.0)
+        .inner_margin(10.0)
+        .show(ui, |ui| {
+            ui.set_min_height((height - 20.0).max(0.0));
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new(&group.label).size(14.0));
+            ui.add_space(16.0);
+            let value = normalized_value(anchor, snapshot, state.overrides);
+            if let Some(value) = level_rail(
+                ui,
+                ui.available_width(),
+                value,
+                state.interactive,
+                &group.anchor,
+            ) {
+                let position = (value * 1000.0).round().clamp(0.0, 1000.0) as u16;
+                if state.demo {
+                    if let (Some(minimum), Some(maximum)) = (anchor.minimum, anchor.maximum) {
+                        let raw =
+                            f64::from(minimum) + (f64::from(maximum - minimum) * value).round();
+                        state
+                            .overrides
+                            .insert(anchor.id.clone(), Value::Integer(raw as i32));
+                    }
+                } else {
+                    state.pending_groups.insert(group.id.clone(), position);
+                }
+            }
+        });
 }
 
 fn strip(
@@ -1117,6 +1272,9 @@ fn demo_state() -> ConfirmedState {
             available: true,
             minimum: Some(0),
             maximum: Some(100),
+            group: Some(GroupCapability {
+                operation: GroupOperation::RelativeLevel,
+            }),
             presentation: Some(ControlPresentation {
                 label: label.into(),
                 kind: PresentationKind::Level,
@@ -1132,6 +1290,7 @@ fn demo_state() -> ConfirmedState {
             available: true,
             minimum: None,
             maximum: None,
+            group: None,
             presentation: Some(ControlPresentation {
                 label: format!("{label} mute"),
                 kind: PresentationKind::Mute,
@@ -1196,7 +1355,7 @@ mod tests {
     };
 
     use super::*;
-    use focusrited::{ControlPresentation, ValueDomain};
+    use focusrited::{ControlPresentation, ValueDomain, dashboard_store::DashboardLevelGroup};
 
     fn capability(order: Option<u8>, kind: PresentationKind) -> ControlCapability {
         ControlCapability {
@@ -1206,6 +1365,9 @@ mod tests {
             available: true,
             minimum: Some(0),
             maximum: Some(100),
+            group: (kind == PresentationKind::Level).then_some(GroupCapability {
+                operation: GroupOperation::RelativeLevel,
+            }),
             presentation: Some(ControlPresentation {
                 label: "Control".into(),
                 kind,
@@ -1319,6 +1481,94 @@ mod tests {
             line,
             "{\"control\":\"level\",\"type\":\"command\",\"v\":1,\"value\":{\"type\":\"integer\",\"value\":42}}\n"
         );
+    }
+
+    #[test]
+    fn group_command_request_uses_normalized_position() {
+        let (mut client, server) = UnixStream::pair().unwrap();
+        write_request(
+            &mut client,
+            ReaderRequest::GroupCommand("linked".into(), 750),
+        )
+        .unwrap();
+        let mut line = String::new();
+        BufReader::new(server).read_line(&mut line).unwrap();
+        assert_eq!(
+            line,
+            "{\"group\":\"linked\",\"position\":750,\"type\":\"group_command\",\"v\":1}\n"
+        );
+    }
+
+    #[test]
+    fn group_failure_result_becomes_toast() {
+        let (_sender, receiver) = mpsc::channel();
+        let mut app = TouchscreenApp::new(receiver, None, false);
+        let state = demo_state();
+        app.apply(Response {
+            version: 1,
+            kind: "snapshot".into(),
+            instance_id: Some("mock".into()),
+            revision: Some(1),
+            online: Some(true),
+            snapshot: Some(state.snapshot.clone()),
+            dashboard: Some(state.dashboard.clone()),
+            error: None,
+            group_result: None,
+        });
+        app.apply(Response {
+            version: 1,
+            kind: "group_command_result".into(),
+            instance_id: Some("mock".into()),
+            revision: Some(3),
+            online: Some(true),
+            snapshot: Some(state.snapshot),
+            dashboard: Some(state.dashboard),
+            error: None,
+            group_result: Some(GroupCommandResult {
+                group: "linked".into(),
+                failed: Some(GroupFailure {
+                    control: ControlId("optical.level".into()),
+                    error: "device_error".into(),
+                }),
+            }),
+        });
+        assert_eq!(
+            app.toast.as_ref().map(|(message, _)| message.as_str()),
+            Some("linked: optical.level failed (device_error)")
+        );
+        assert_eq!(app.state.as_ref().map(|state| state.revision), Some(3));
+    }
+
+    #[test]
+    fn pending_group_command_needs_repaint() {
+        let (_sender, receiver) = mpsc::channel();
+        let mut app = TouchscreenApp::new(receiver, None, false);
+        assert!(!app.has_pending_commands());
+        app.pending_groups.insert("linked".into(), 750);
+        assert!(app.has_pending_commands());
+    }
+
+    #[test]
+    fn dashboard_groups_use_configured_anchor() {
+        let anchor = capability(Some(0), PresentationKind::Level);
+        let snapshot = DeviceSnapshot {
+            device_id: "mock".into(),
+            capability_schema: "mock-v1".into(),
+            capabilities: vec![anchor.clone(), capability(Some(1), PresentationKind::Level)],
+            values: BTreeMap::new(),
+        };
+        let mut dashboard = DashboardConfig::defaults(&snapshot);
+        dashboard.version = 2;
+        dashboard.level_groups = vec![DashboardLevelGroup {
+            id: "linked".into(),
+            label: "Linked".into(),
+            members: vec![anchor.id.clone(), ControlId("control-Some(1)".into())],
+            anchor: anchor.id.clone(),
+        }];
+        let groups = dashboard_groups(&snapshot, &dashboard);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].0.id, "linked");
+        assert_eq!(groups[0].1.id, anchor.id);
     }
 
     #[test]

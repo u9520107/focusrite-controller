@@ -21,10 +21,13 @@ Unix-socket clients use equivalent snapshot, command, and event messages.
 
 Phase 4a local IPC is newline-delimited JSON over the daemon-owned Unix socket.
 Each message is at most 64 KiB. Client requests include `v: 1` and a `type`:
-`snapshot`, or `command` with opaque `control` and typed `value`. The daemon
-returns `snapshot`, `command_result`, `event`, or bounded `error` JSON. State
-messages carry `instance_id`, `revision`, `online`, and full authoritative
-snapshot. Typed values use tagged JSON, for example
+`snapshot`, `command` with opaque `control` and typed `value`, or
+`group_command` with a configured opaque `group` ID and canonical integer
+`position` in `0..=1000`. The daemon returns `snapshot`, `command_result`,
+`group_command_result`, `event`, or bounded `error` JSON. State messages carry
+`instance_id`, `revision`, `online`, and full authoritative snapshot. A group
+result additionally names applied/skipped members and its first failed member
+with a safe error code. Typed values use tagged JSON, for example
 `{"type":"integer","value":75}`.
 
 Malformed, oversized, and unsupported-version requests receive one safe error
@@ -32,11 +35,11 @@ then their connection closes. Each connection has a bounded outbound queue;
 newer unsent state events may replace older unsent events, while replies do not
 coalesce. Queue overflow disconnects only that client.
 
-This initial local transport deliberately omits profiles, compound commands,
-dangerous-control confirmation, and idempotency keys because service semantics
-for those operations are not complete. Phase 4a profile work and Phase 5 LAN
-API extend the protocol without changing daemon ownership or snapshot-resync
-rules.
+This initial local transport deliberately omits profiles, dangerous-control
+confirmation, and idempotency keys. Group commands are limited to persisted,
+adapter-declared `relative_level` groups and remain non-atomic ordered writes.
+Phase 4a profile work and Phase 5 LAN API extend the protocol without changing
+daemon ownership or snapshot-resync rules.
 
 ## State rules
 

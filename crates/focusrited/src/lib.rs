@@ -13,7 +13,7 @@ pub mod worker;
 
 use std::{collections::BTreeMap, thread, time::Duration};
 
-use groups::{GroupError, GroupResult, LevelGroup, map_level};
+use groups::{GroupError, GroupResult, LevelGroup, map_level, unmap_level};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
 #[serde(transparent)]
@@ -45,6 +45,18 @@ pub enum PresentationKind {
     Mute,
 }
 
+/// Adapter-declared compound operation eligibility. Absence fails closed.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GroupOperation {
+    RelativeLevel,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct GroupCapability {
+    pub operation: GroupOperation,
+}
+
 /// Adapter-declared UI metadata. Absence means client must not guess display.
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ControlPresentation {
@@ -66,6 +78,8 @@ pub struct ControlCapability {
     pub available: bool,
     pub minimum: Option<i32>,
     pub maximum: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<GroupCapability>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub presentation: Option<ControlPresentation>,
 }
@@ -190,8 +204,11 @@ impl<D: Device> Service<D> {
         group: &LevelGroup,
         position: u16,
     ) -> Result<GroupResult, GroupError> {
+        if position > 1000 {
+            return Err(GroupError::InvalidPosition);
+        }
         group.validate(&self.snapshot.capabilities)?;
-        let commands = group
+        let normalized = group
             .members
             .iter()
             .map(|member| {
@@ -201,10 +218,50 @@ impl<D: Device> Service<D> {
                     .iter()
                     .find(|item| item.id == *member)
                     .ok_or_else(|| GroupError::IneligibleMember(member.clone()))?;
+                let Value::Integer(value) = self
+                    .snapshot
+                    .values
+                    .get(member)
+                    .ok_or_else(|| GroupError::UnmappableCurrentState(member.clone()))?
+                else {
+                    return Err(GroupError::UnmappableCurrentState(member.clone()));
+                };
+                Ok((
+                    member.clone(),
+                    unmap_level(
+                        *value,
+                        capability
+                            .minimum
+                            .ok_or_else(|| GroupError::IneligibleMember(member.clone()))?,
+                        capability
+                            .maximum
+                            .ok_or_else(|| GroupError::IneligibleMember(member.clone()))?,
+                    )
+                    .map_err(|_| GroupError::UnmappableCurrentState(member.clone()))?,
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let anchor = normalized
+            .iter()
+            .find(|(member, _)| *member == group.anchor)
+            .map(|(_, position)| *position)
+            .ok_or(GroupError::InvalidAnchor)?;
+        let delta = i32::from(position) - i32::from(anchor);
+        let commands = group
+            .members
+            .iter()
+            .zip(normalized)
+            .map(|(member, (_, current))| {
+                let capability = self
+                    .snapshot
+                    .capabilities
+                    .iter()
+                    .find(|item| item.id == *member)
+                    .ok_or_else(|| GroupError::IneligibleMember(member.clone()))?;
                 Ok((
                     member.clone(),
                     map_level(
-                        position,
+                        (i32::from(current) + delta).clamp(0, 1000) as u16,
                         capability
                             .minimum
                             .ok_or_else(|| GroupError::IneligibleMember(member.clone()))?,
@@ -217,9 +274,14 @@ impl<D: Device> Service<D> {
             .collect::<Result<Vec<_>, _>>()?;
         let mut result = GroupResult {
             applied: Vec::new(),
+            skipped: Vec::new(),
             failed: None,
         };
         for (member, value) in commands {
+            if self.snapshot.values.get(&member) == Some(&Value::Integer(value)) {
+                result.skipped.push(member);
+                continue;
+            }
             if let Err(error) = self.command(&member, Value::Integer(value)) {
                 result.failed = Some((member.clone(), error));
                 return Ok(result);
@@ -379,6 +441,9 @@ mod tests {
                     available: true,
                     minimum: Some(0),
                     maximum: Some(100),
+                    group: Some(GroupCapability {
+                        operation: GroupOperation::RelativeLevel,
+                    }),
                     presentation: None,
                 }],
                 values: BTreeMap::from([(volume, Value::Integer(50))]),
@@ -468,6 +533,9 @@ mod tests {
             available: true,
             minimum: Some(20),
             maximum: Some(220),
+            group: Some(GroupCapability {
+                operation: GroupOperation::RelativeLevel,
+            }),
             presentation: None,
         });
         device
@@ -479,14 +547,16 @@ mod tests {
             .command_level_group(
                 &LevelGroup {
                     members: vec![first.clone(), second.clone()],
+                    anchor: first.clone(),
                 },
-                500,
+                750,
             )
             .unwrap();
         assert_eq!(result.applied, vec![first.clone(), second.clone()]);
+        assert_eq!(result.skipped, Vec::<ControlId>::new());
         assert_eq!(result.failed, None);
-        assert_eq!(service.snapshot().values[&first], Value::Integer(50));
-        assert_eq!(service.snapshot().values[&second], Value::Integer(120));
+        assert_eq!(service.snapshot().values[&first], Value::Integer(75));
+        assert_eq!(service.snapshot().values[&second], Value::Integer(70));
     }
 
     #[test]
@@ -503,6 +573,9 @@ mod tests {
                 available: true,
                 minimum: Some(0),
                 maximum: Some(100),
+                group: Some(GroupCapability {
+                    operation: GroupOperation::RelativeLevel,
+                }),
                 presentation: None,
             });
             device
@@ -517,12 +590,14 @@ mod tests {
             .command_level_group(
                 &LevelGroup {
                     members: vec![first.clone(), second.clone(), third.clone()],
+                    anchor: first.clone(),
                 },
                 750,
             )
             .unwrap();
 
         assert_eq!(result.applied, vec![first.clone()]);
+        assert_eq!(result.skipped, Vec::<ControlId>::new());
         assert_eq!(
             result.failed,
             Some((second.clone(), ServiceError::Device(DeviceError::Failed)))
@@ -530,6 +605,120 @@ mod tests {
         assert_eq!(service.device.writes, vec![first.clone(), second]);
         assert_eq!(service.snapshot().values[&first], Value::Integer(75));
         assert_eq!(service.snapshot().values[&third], Value::Integer(0));
+    }
+
+    #[test]
+    fn level_group_clamps_preserved_balance_at_limits() {
+        let first = ControlId("output.volume".into());
+        let second = ControlId("optical.volume".into());
+        let mut device = mock();
+        device.snapshot.capabilities.push(ControlCapability {
+            id: second.clone(),
+            domain: ValueDomain::Integer,
+            writable: true,
+            available: true,
+            minimum: Some(0),
+            maximum: Some(100),
+            group: Some(GroupCapability {
+                operation: GroupOperation::RelativeLevel,
+            }),
+            presentation: None,
+        });
+        device
+            .snapshot
+            .values
+            .insert(second.clone(), Value::Integer(90));
+        let mut service = Service::connect(device).unwrap();
+
+        let result = service
+            .command_level_group(
+                &LevelGroup {
+                    members: vec![first.clone(), second.clone()],
+                    anchor: first.clone(),
+                },
+                1000,
+            )
+            .unwrap();
+
+        assert_eq!(result.applied, vec![first.clone(), second.clone()]);
+        assert_eq!(service.snapshot().values[&first], Value::Integer(100));
+        assert_eq!(service.snapshot().values[&second], Value::Integer(100));
+    }
+
+    #[test]
+    fn level_group_rejects_invalid_baseline_without_writes() {
+        let first = ControlId("output.volume".into());
+        let second = ControlId("optical.volume".into());
+        let mut device = mock();
+        device.snapshot.capabilities.push(ControlCapability {
+            id: second.clone(),
+            domain: ValueDomain::Integer,
+            writable: true,
+            available: true,
+            minimum: Some(0),
+            maximum: Some(100),
+            group: Some(GroupCapability {
+                operation: GroupOperation::RelativeLevel,
+            }),
+            presentation: None,
+        });
+        device
+            .snapshot
+            .values
+            .insert(first.clone(), Value::Integer(101));
+        device
+            .snapshot
+            .values
+            .insert(second.clone(), Value::Integer(0));
+        let mut service = Service::connect(device).unwrap();
+
+        assert_eq!(
+            service.command_level_group(
+                &LevelGroup {
+                    members: vec![first.clone(), second],
+                    anchor: first.clone(),
+                },
+                500,
+            ),
+            Err(GroupError::UnmappableCurrentState(first))
+        );
+        assert!(service.device.writes.is_empty());
+    }
+
+    #[test]
+    fn level_group_rejects_out_of_range_position_without_writes() {
+        let first = ControlId("output.volume".into());
+        let second = ControlId("optical.volume".into());
+        let mut device = mock();
+        device.snapshot.capabilities.push(ControlCapability {
+            id: second.clone(),
+            domain: ValueDomain::Integer,
+            writable: true,
+            available: true,
+            minimum: Some(0),
+            maximum: Some(100),
+            group: Some(GroupCapability {
+                operation: GroupOperation::RelativeLevel,
+            }),
+            presentation: None,
+        });
+        device
+            .snapshot
+            .values
+            .insert(second.clone(), Value::Integer(25));
+        let mut service = Service::connect(device).unwrap();
+
+        assert_eq!(
+            service.command_level_group(
+                &LevelGroup {
+                    members: vec![first, second],
+                    anchor: ControlId("output.volume".into()),
+                },
+                1001,
+            ),
+            Err(GroupError::InvalidPosition)
+        );
+        assert!(service.device.writes.is_empty());
     }
 
     #[test]
