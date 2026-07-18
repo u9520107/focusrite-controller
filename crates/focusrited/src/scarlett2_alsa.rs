@@ -3,11 +3,12 @@
 //! Instances stay read-only unless constructed with an explicitly approved
 //! discovered boolean control for a bounded hardware test.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, time::Duration};
 
 use alsa::{
     ctl::{Ctl, ElemType, ElemValue},
     hctl::HCtl,
+    poll::poll_all,
 };
 
 use crate::{
@@ -68,6 +69,7 @@ impl std::error::Error for DiscoveryError {}
 pub struct Scarlett2Alsa {
     card: String,
     writable_controls: BTreeSet<ControlId>,
+    event_control: Option<Ctl>,
 }
 
 impl Scarlett2Alsa {
@@ -75,6 +77,7 @@ impl Scarlett2Alsa {
         Self {
             card: card.into(),
             writable_controls: BTreeSet::new(),
+            event_control: None,
         }
     }
 
@@ -86,6 +89,7 @@ impl Scarlett2Alsa {
         Self {
             card: card.into(),
             writable_controls,
+            event_control: None,
         }
     }
 }
@@ -105,6 +109,40 @@ impl Device for Scarlett2Alsa {
             return Err(DeviceError::WriteDisabled);
         };
         write_boolean(&self.card, control, value)
+    }
+
+    fn wait_for_change(&mut self, timeout: Duration) -> Result<bool, DeviceError> {
+        if self.event_control.is_none() {
+            let control =
+                Ctl::new(&format!("hw:{}", self.card), true).map_err(|_| DeviceError::Offline)?;
+            control
+                .subscribe_events(true)
+                .map_err(|_| DeviceError::Offline)?;
+            self.event_control = Some(control);
+        }
+
+        let timeout = timeout.as_millis().try_into().unwrap_or(i32::MAX);
+        let result = {
+            let control = self
+                .event_control
+                .as_ref()
+                .expect("event control initialized");
+            if poll_all(&[control], timeout)
+                .map_err(|_| DeviceError::Offline)?
+                .is_empty()
+            {
+                Ok(false)
+            } else {
+                control
+                    .read()
+                    .map(|event| event.is_some())
+                    .map_err(|_| DeviceError::Offline)
+            }
+        };
+        if result.is_err() {
+            self.event_control = None;
+        }
+        result
     }
 }
 
