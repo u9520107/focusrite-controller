@@ -8,11 +8,13 @@ use crate::{
 };
 
 pub const DEFAULT_PROFILE_STORE_PATH: &str = "/var/lib/focusrited/profiles";
+pub const DEFAULT_SOCKET_PATH: &str = "/run/focusrited/focusrited.sock";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     pub card: Option<String>,
     pub profile_store_path: PathBuf,
+    pub socket_path: PathBuf,
 }
 
 impl Default for Config {
@@ -20,6 +22,7 @@ impl Default for Config {
         Self {
             card: None,
             profile_store_path: DEFAULT_PROFILE_STORE_PATH.into(),
+            socket_path: DEFAULT_SOCKET_PATH.into(),
         }
     }
 }
@@ -40,6 +43,12 @@ impl Config {
                         .map(PathBuf::from)
                         .ok_or(ConfigError::MissingProfileStorePath)?;
                 }
+                "--socket" => {
+                    config.socket_path = arguments
+                        .next()
+                        .map(PathBuf::from)
+                        .ok_or(ConfigError::MissingSocketPath)?;
+                }
                 "--help" | "-h" => return Err(ConfigError::Help),
                 _ => return Err(ConfigError::UnknownArgument(argument)),
             }
@@ -53,17 +62,18 @@ pub enum ConfigError {
     Help,
     MissingCard,
     MissingProfileStorePath,
+    MissingSocketPath,
     UnknownArgument(String),
 }
 
 impl std::fmt::Display for ConfigError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Help => {
-                formatter.write_str("usage: focusrited --card CARD [--profile-store PATH]")
-            }
+            Self::Help => formatter
+                .write_str("usage: focusrited --card CARD [--profile-store PATH] [--socket PATH]"),
             Self::MissingCard => formatter.write_str("--card requires an ALSA card name"),
             Self::MissingProfileStorePath => formatter.write_str("--profile-store requires a path"),
+            Self::MissingSocketPath => formatter.write_str("--socket requires a path"),
             Self::UnknownArgument(argument) => write!(formatter, "unknown argument: {argument}"),
         }
     }
@@ -121,6 +131,7 @@ mod tests {
         .unwrap();
         assert_eq!(config.card.as_deref(), Some("Solo"));
         assert_eq!(config.profile_store_path, PathBuf::from("/tmp/profiles"));
+        assert_eq!(config.socket_path, PathBuf::from(DEFAULT_SOCKET_PATH));
     }
 
     struct MockDevice(DeviceSnapshot);
@@ -160,6 +171,7 @@ mod tests {
         let config = Config {
             card: None,
             profile_store_path: path.clone(),
+            socket_path: DEFAULT_SOCKET_PATH.into(),
         };
         let store = ProfileStore::new(&path);
         let mut saved = Service::connect(device(50)).unwrap();

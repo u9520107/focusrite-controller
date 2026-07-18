@@ -17,6 +17,27 @@ not Rust internals.
 
 Unix-socket clients use equivalent snapshot, command, and event messages.
 
+## Local IPC v1
+
+Phase 4a local IPC is newline-delimited JSON over the daemon-owned Unix socket.
+Each message is at most 64 KiB. Client requests include `v: 1` and a `type`:
+`snapshot`, or `command` with opaque `control` and typed `value`. The daemon
+returns `snapshot`, `command_result`, `event`, or bounded `error` JSON. State
+messages carry `instance_id`, `revision`, `online`, and full authoritative
+snapshot. Typed values use tagged JSON, for example
+`{"type":"integer","value":75}`.
+
+Malformed, oversized, and unsupported-version requests receive one safe error
+then their connection closes. Each connection has a bounded outbound queue;
+newer unsent state events may replace older unsent events, while replies do not
+coalesce. Queue overflow disconnects only that client.
+
+This initial local transport deliberately omits profiles, compound commands,
+dangerous-control confirmation, and idempotency keys because service semantics
+for those operations are not complete. Phase 4a profile work and Phase 5 LAN
+API extend the protocol without changing daemon ownership or snapshot-resync
+rules.
+
 ## State rules
 
 - Snapshot includes `instance_id`, device identity, connection state,
