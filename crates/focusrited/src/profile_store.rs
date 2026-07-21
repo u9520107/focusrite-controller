@@ -287,6 +287,8 @@ mod tests {
                 available: true,
                 minimum: Some(0),
                 maximum: Some(100),
+                group: None,
+                presentation: None,
             }],
             values: BTreeMap::from([(control, Value::Integer(value))]),
         }))

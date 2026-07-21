@@ -8,6 +8,11 @@ optional named profiles. It configures hardware mixer/routing settings, but
 does not carry, process, record, or play host audio. Live audio meters are
 deferred.
 
+It is not a Focusrite Control 2 replacement. Product work targets only
+declared personal convenience workflows: selecting and controlling proven
+multi-device or multi-output paths. Feature parity, broad input processing,
+and exposing every discovered device control are explicitly out of scope.
+
 ## Ownership
 
 ```text
@@ -100,6 +105,11 @@ hidden by default. If a user tries to enable their display, the UI must warn
 that the control cannot be changed remotely and must never present it as an
 actionable slider/button.
 
+Discovered controls without a current personal-workflow need remain hidden,
+even when their hardware semantics could later be proven. This includes Solo
+Direct Monitor source levels and A/B balance: physical input/output controls
+are sufficient for current use.
+
 Dangerous controls need explicit confirmation. Firmware update and factory reset
 are outside v1.
 
@@ -122,12 +132,35 @@ confirmed. Hardware cannot guarantee atomicity for a non-native group write.
 External ALSA/front-panel mutations still reconcile each member's canonical
 state and create a new revision.
 
-Where discovery proves a readable front-panel monitor level and writable
-optical-mix master gain, users may enable a one-way mirror binding: a confirmed
-front-panel level change writes the mapped optical gain. It is off by default,
-available only for a dedicated optical mix, and reports partial-write failure.
-This is not a native monitor group and must not feed optical changes back into
-the front-panel control.
+A linked group is a virtual control as well as an operation: it may appear as a
+named dashboard track while its individual members remain independently
+displayable and controllable. Membership is operation-compatible; compatible
+level groups may span input/output sides, but never implicitly include phantom
+power, gain, clock, or other dangerous controls. Creation/editing first belongs
+to LAN/web configuration or validated CLI import, not keyboard-free touchscreen.
+Touchscreen consumes configured groups.
+
+Raw level values are not portable. Cross-control group, mirror, and sync
+operations map through a canonical normalized position, preferring declared dB
+ranges and otherwise declared integer bounds; snapshots and profiles retain raw
+confirmed values. Per-control cut configuration is explicit: proven hardware
+mute, visible level-minimum `Cut`, or no cut action. A level-minimum Cut is
+never represented as hardware mute.
+Control groups and synchronized level sets have leaf-control members only;
+they never contain groups or sets. Future nested dashboard collections are
+organization only and cannot issue control commands.
+
+Phase 4c generalizes a discovered front-panel-monitor-to-optical-gain case into
+explicit one-way mirror bindings and synchronized level sets. A confirmed
+eligible source level writes capability-declared mapped target level through
+serial worker. One-way bindings are off by default and reject cycles. A
+synchronized set is not mirrors: any member may drive all others through a
+shared normalized canonical level, while generation/origin/expected-
+confirmation tracking suppresses write echoes and serialized last confirmed
+change wins. This lets physical main monitor knob drive declared optical speaker
+fader, optical/UI change drive main monitor level, and later supports more
+members. Target partial-write failure never rolls source back; set reports
+degraded state. Members remain independently controllable.
 
 ## Persistence
 
@@ -135,6 +168,10 @@ Persist only daemon preferences, per-device user metadata (labels and linked
 groups), and user-named profiles. Preserve physical device state at startup.
 Applying a profile is explicit; no startup profile write occurs in v1. Atomic
 writes occur on profile or metadata changes, never every fader movement.
+Preference/group configuration is versioned, atomically stored, and supports
+validated CLI export/import without hardware writes. Manual file editing is an
+offline workflow: stop daemon, edit, then let normal startup validation accept
+or reject it. Live UI changes go through daemon API, never direct file writes.
 Profile apply is a non-rollback transaction: bind profile to device identity
 and capability-schema version; dry-run diff first; require explicit
 confirmation for dangerous values; apply deterministic adapter-declared order;

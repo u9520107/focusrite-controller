@@ -4,17 +4,28 @@ use std::{io, path::PathBuf};
 
 use crate::{
     Device, Service, ServiceError,
+    dashboard_store::{DashboardConfig, DashboardStore},
     profile_store::{ProfileStore, Profiles},
 };
 
 pub const DEFAULT_PROFILE_STORE_PATH: &str = "/var/lib/focusrited/profiles";
+pub const DEFAULT_DASHBOARD_STORE_PATH: &str = "/var/lib/focusrited/dashboard.json";
 pub const DEFAULT_SOCKET_PATH: &str = "/run/focusrited/focusrited.sock";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Config {
     pub card: Option<String>,
     pub profile_store_path: PathBuf,
+    pub dashboard_store_path: PathBuf,
     pub socket_path: PathBuf,
+    pub dashboard_action: Option<DashboardAction>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DashboardAction {
+    Inspect,
+    Export(PathBuf),
+    Import(PathBuf),
 }
 
 impl Default for Config {
@@ -22,7 +33,9 @@ impl Default for Config {
         Self {
             card: None,
             profile_store_path: DEFAULT_PROFILE_STORE_PATH.into(),
+            dashboard_store_path: DEFAULT_DASHBOARD_STORE_PATH.into(),
             socket_path: DEFAULT_SOCKET_PATH.into(),
+            dashboard_action: None,
         }
     }
 }
@@ -49,11 +62,37 @@ impl Config {
                         .map(PathBuf::from)
                         .ok_or(ConfigError::MissingSocketPath)?;
                 }
+                "--dashboard-store" => {
+                    config.dashboard_store_path = arguments
+                        .next()
+                        .map(PathBuf::from)
+                        .ok_or(ConfigError::MissingDashboardStorePath)?;
+                }
+                "--dashboard-inspect" => config.set_dashboard_action(DashboardAction::Inspect)?,
+                "--dashboard-export" => config.set_dashboard_action(DashboardAction::Export(
+                    arguments
+                        .next()
+                        .map(PathBuf::from)
+                        .ok_or(ConfigError::MissingDashboardExportPath)?,
+                ))?,
+                "--dashboard-import" => config.set_dashboard_action(DashboardAction::Import(
+                    arguments
+                        .next()
+                        .map(PathBuf::from)
+                        .ok_or(ConfigError::MissingDashboardImportPath)?,
+                ))?,
                 "--help" | "-h" => return Err(ConfigError::Help),
                 _ => return Err(ConfigError::UnknownArgument(argument)),
             }
         }
         Ok(config)
+    }
+
+    fn set_dashboard_action(&mut self, action: DashboardAction) -> Result<(), ConfigError> {
+        if self.dashboard_action.replace(action).is_some() {
+            return Err(ConfigError::MultipleDashboardActions);
+        }
+        Ok(())
     }
 }
 
@@ -62,6 +101,10 @@ pub enum ConfigError {
     Help,
     MissingCard,
     MissingProfileStorePath,
+    MissingDashboardStorePath,
+    MissingDashboardExportPath,
+    MissingDashboardImportPath,
+    MultipleDashboardActions,
     MissingSocketPath,
     UnknownArgument(String),
 }
@@ -70,9 +113,13 @@ impl std::fmt::Display for ConfigError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Help => formatter
-                .write_str("usage: focusrited --card CARD [--profile-store PATH] [--socket PATH]"),
+                .write_str("usage: focusrited --card CARD [--profile-store PATH] [--dashboard-store PATH] [--socket PATH] [--dashboard-inspect|--dashboard-export PATH|--dashboard-import PATH]"),
             Self::MissingCard => formatter.write_str("--card requires an ALSA card name"),
             Self::MissingProfileStorePath => formatter.write_str("--profile-store requires a path"),
+            Self::MissingDashboardStorePath => formatter.write_str("--dashboard-store requires a path"),
+            Self::MissingDashboardExportPath => formatter.write_str("--dashboard-export requires a path"),
+            Self::MissingDashboardImportPath => formatter.write_str("--dashboard-import requires a path"),
+            Self::MultipleDashboardActions => formatter.write_str("select only one dashboard action"),
             Self::MissingSocketPath => formatter.write_str("--socket requires a path"),
             Self::UnknownArgument(argument) => write!(formatter, "unknown argument: {argument}"),
         }
@@ -109,6 +156,10 @@ pub fn load_profiles(config: &Config) -> io::Result<Profiles> {
     ProfileStore::new(&config.profile_store_path).load()
 }
 
+pub fn load_dashboard(config: &Config) -> io::Result<Option<DashboardConfig>> {
+    DashboardStore::new(&config.dashboard_store_path).load()
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
@@ -132,6 +183,25 @@ mod tests {
         assert_eq!(config.card.as_deref(), Some("Solo"));
         assert_eq!(config.profile_store_path, PathBuf::from("/tmp/profiles"));
         assert_eq!(config.socket_path, PathBuf::from(DEFAULT_SOCKET_PATH));
+        assert_eq!(config.dashboard_action, None);
+    }
+
+    #[test]
+    fn dashboard_actions_require_one_unambiguous_operation() {
+        let export =
+            Config::from_args(["--dashboard-export".into(), "/tmp/dashboard.json".into()]).unwrap();
+        assert_eq!(
+            export.dashboard_action,
+            Some(DashboardAction::Export("/tmp/dashboard.json".into()))
+        );
+        assert_eq!(
+            Config::from_args([
+                "--dashboard-inspect".into(),
+                "--dashboard-import".into(),
+                "in.json".into()
+            ]),
+            Err(ConfigError::MultipleDashboardActions)
+        );
     }
 
     struct MockDevice(DeviceSnapshot);
@@ -159,6 +229,8 @@ mod tests {
                 available: true,
                 minimum: Some(0),
                 maximum: Some(100),
+                group: None,
+                presentation: None,
             }],
             values: BTreeMap::from([(control, Value::Integer(value))]),
         })
@@ -171,7 +243,9 @@ mod tests {
         let config = Config {
             card: None,
             profile_store_path: path.clone(),
+            dashboard_store_path: path.with_extension("dashboard.json"),
             socket_path: DEFAULT_SOCKET_PATH.into(),
+            dashboard_action: None,
         };
         let store = ProfileStore::new(&path);
         let mut saved = Service::connect(device(50)).unwrap();

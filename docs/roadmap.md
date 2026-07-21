@@ -65,15 +65,16 @@ ignored tests cannot mutate hardware accidentally.
 Exit: Solo service runs reliably on prepared Pi; target-specific limits and
 deployment prerequisites are recorded.
 
-## Phase 4a: Local touchscreen — planned
+## Phase 4a: Local touchscreen — in progress
 
 Execution plan: [Phase 4a local touchscreen plan](phases/phase-4a-local-touchscreen.md).
 
-Implement versioned Unix-socket snapshot, command, and event messages, then
-build fullscreen Rust touch UI using only that local API. Start with main
-monitor/output controls; add capability groups after hardware and screen-fit
-validation. Add local profile save/list, binding/diff dry-run, reviewed apply,
-and per-control applied/skipped/failed results.
+MR 1 provides merged versioned Unix-socket snapshot, command, and event
+messages. MR 2a adds additive capability presentation metadata; MR 2b adds the
+fullscreen local client and read-only Pi kiosk evidence, including client
+restart with daemon continuity. Phase 4c adds persisted dashboard configuration
+and mock-only groups independently. Local profile workflow remains MR 3:
+save/list, binding/diff dry-run, reviewed apply, and per-control results.
 
 Exit: hardware controller works from Pi display; touchscreen-client crash does
 not affect daemon; mock IPC tests cover command ordering, reconnect, and
@@ -88,6 +89,20 @@ added. Devices without a proven meter source omit the feature.
 
 Exit: supported hardware shows current meter values without affecting command
 ordering or device control; unsupported hardware remains fully usable.
+
+## Phase 4c: Dashboard configuration and virtual groups — planned
+
+Execution plan: [Phase 4c dashboard groups plan](phases/phase-4c-dashboard-groups.md).
+
+Add daemon-owned, portable dashboard configuration and safe virtual input/output
+groups. Begin with validated CLI export/import and mock service semantics, then
+render configured groups on touchscreen. Group creation/membership editing is
+deferred to Phase 5 web UI; touchscreen consumes groups and stays keyboard-free.
+This work follows Phase 4a and does not wait for optional Phase 4b metering.
+
+Exit: configured dashboard survives restart; individual and virtual tracks are
+independently controllable; non-native group results are confirmed per member;
+config import/export never writes hardware.
 
 ## Phase 5: LAN and web access — planned
 
@@ -122,8 +137,9 @@ clients; macro-pad failure or removal does not affect daemon/device operation.
 
 When hardware becomes available, run bounded read-only discovery on direct
 Linux first, then validate FCP, `fcp-server`, ALSA controls, lifecycle, and
-reconciliation on Pi. Harden service behavior from those findings. Solo success
-does not imply 16i16 routing or monitor-group support.
+reconciliation on Pi. Harden service behavior from those findings. Follow the
+[16i16 reference review and validation boundary](hardware-support.md#scarlett-16i16-4th-gen).
+Solo success does not imply 16i16 routing or monitor-group support.
 
 Exit: sanitized 16i16 evidence proves supported controls and Pi FCP readiness;
 service handles FCP recovery, external changes, and documented unsupported

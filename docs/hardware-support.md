@@ -9,6 +9,49 @@ included in Linux 6.14+, plus `fcp-server` userspace support and firmware.
 
 Source: [Linux ALSA Focusrite Control/Mixer Drivers](https://github.com/geoffreybennett/linux-fcp).
 
+## Upstream control-panel reference review
+
+[`alsa-scarlett-gui`](https://github.com/geoffreybennett/alsa-scarlett-gui)
+is a broad Linux Focusrite Control/Control 2 replacement. Its current source
+and documentation are useful reference for supported control families,
+relationships, FCP lifecycle expectations, and known device behavior. It is
+GPL-3.0-or-later; this MIT project must not copy, link, or derive product code
+from it. See `AGENTS.md` for the required ignored-checkout refresh rule.
+
+Reference findings are hypotheses, not runtime authority. Every supported
+capability still needs bounded target discovery proving its current IDs,
+bounds, access, availability, and unambiguous relationship shape before this
+project exposes it or permits a write.
+
+### Scarlett Solo 4th Gen
+
+Upstream documents Solo through the kernel `scarlett2` ALSA driver and confirms
+that enabling Direct Monitor changes internal Mix A/B output routing; customised
+mixer values persist for the next enable. The physical input gain and output/
+headphone level knobs remain separate controls.
+
+This project's current personal-helper scope does not need Direct Monitor
+source-level or A/B-balance control. Keep the raw Mix/Monitor Mix cells hidden
+and non-writable. Bounded read-only discovery and Direct Monitor state
+reconciliation remain useful; no Focusrite-Control-style mixer UI is planned.
+
+### Scarlett 16i16 4th Gen
+
+Upstream documents the 16i16 as an FCP device: Linux 6.14+ FCP support,
+compatible firmware, and `fcp-server` are prerequisites before its ALSA
+control surface is useful. Its control panel uses the FCP server's ready ALSA
+state, including a usable locked `Firmware Version` control, as a readiness
+signal. Treat that as an implementation hypothesis to verify on target Pi
+hardware, not a fixed cross-device contract.
+
+The project has no `FcpAlsa` implementation yet. Phase 7 begins with
+read-only platform and lifecycle evidence: FCP installation, `fcp-server`
+startup/restart, ALSA control appearance/removal, USB reconnect, and sanitized
+capability fixture. Only then choose one proven personal output workflow for a
+narrow adapter-declared capability. Do not import the upstream routing matrix,
+monitor-group editor, meters, DSP controls, firmware updates, reset actions,
+or feature-parity UI.
+
 ## 16i16 platform acceptance gate
 
 Before claiming or packaging 16i16 support, prove on target Pi OS ARM64 that
@@ -54,6 +97,27 @@ contents`, and journal output with relevant device/card filters and line caps.
 Redact serial numbers, LAN addresses/tokens, usernames, and unrelated system
 data before saving captures; retain only controls, versions, and lifecycle
 evidence needed for fixture.
+
+## Adaptive structural capability mapping
+
+The daemon ships adapter rules, not firmware- or ALSA-version-specific builds.
+At runtime an adapter identifies a logical capability from a reviewed,
+device-local control shape: control type/count/access, required companions,
+and the complete relationship graph. It uses discovered control IDs, bounds,
+and steps at runtime rather than fixed numids or numeric ranges.
+
+Routine drift such as reordered controls, shifted numids, or changed level
+bounds remains supported when exactly one mapping satisfies the adapter rule.
+Capability fingerprints are recorded for diagnostics and fixture comparison;
+they are not compatibility gates by themselves. A logical writable capability
+is withheld only when required controls are missing, relationships contradict
+the rule, or more than one candidate mapping fits. The daemon must not guess
+between ambiguous candidates.
+
+New or changed shapes begin as bounded read-only discovery. Add a sanitized
+fixture and reviewed adapter rule before exposing a writable logical capability.
+Raw matrix cells remain adapter-private; an adapter may expose a documented
+compound operation only after its complete mapping is unambiguous.
 
 ## 16i16 routing questions to verify
 

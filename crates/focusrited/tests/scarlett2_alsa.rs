@@ -23,6 +23,7 @@ fn fixture_records_solo_controls() {
 
     assert!(fixture.contains("Direct Monitor Playback Switch"));
     assert!(fixture.contains("0–184"));
+    assert!(fixture.contains("step 1"));
 }
 
 #[test]
@@ -37,6 +38,15 @@ fn discovers_attached_solo() {
     assert!(discovery.controls.len() >= 56);
     assert!(discovery.controls.iter().any(|control| {
         control.name == "Level Meter" && control.value_type == ValueType::Integer
+    }));
+    assert!(discovery.controls.iter().any(|control| {
+        control.name.starts_with("Monitor Mix ")
+            && control.integer_range
+                == Some(focusrited::scarlett2_alsa::IntegerRange {
+                    minimum: 0,
+                    maximum: 184,
+                    step: 1,
+                })
     }));
 
     let worker = DeviceWorker::start(Scarlett2Alsa::new(card)).unwrap();

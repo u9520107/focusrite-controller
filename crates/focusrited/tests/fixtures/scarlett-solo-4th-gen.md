@@ -19,9 +19,9 @@ Firmware control reports version `2417`; minimum version reports `2115`.
 | Input 2 phantom | `Line In 2 Phantom Power Capture Switch` | boolean | off/on |
 | Analogue output route | `Analogue Output 0[1-2] Playback Enum` | enum | same route domain |
 | Direct monitor | `Direct Monitor Playback Switch` | boolean | off/on |
-| Mixer input level | `Mix [A-F] Input 0[1-4] Playback Volume` | integer | 0–184, -80.00 to +12.00 dB |
+| Mixer input level | `Mix [A-F] Input 0[1-4] Playback Volume` | integer | 0–184, step 1, -80.00 to +12.00 dB |
 | Mixer input route | `Mixer Input 0[1-4] Capture Enum` | enum | same route domain |
-| Monitor-mix level | `Monitor Mix [A-B] Input 0[1-4] Playback Volume` | integer | 0–184, -80.00 to +12.00 dB |
+| Monitor-mix level | `Monitor Mix [A-B] Input 0[1-4] Playback Volume` | integer | 0–184, step 1, -80.00 to +12.00 dB |
 
 `Mix` levels (24 controls) and `Monitor Mix` levels (8 controls) report ALSA
 readback events. Production discovery must retain the actual ALSA identifier,

@@ -14,6 +14,10 @@
 - Review every new dependency's license; preserve required third-party notices.
 - Follow [licensing policy](docs/licensing.md) before distributing artifacts or
   patching upstream dependencies.
+- `externals/alsa-scarlett-gui` is an ignored GPL-3.0-or-later reference
+  checkout. Read it for device behavior, ALSA/FCP control shapes, and lifecycle
+  expectations; never copy, link, or derive product code from it into this MIT
+  project.
 
 ## Architecture constraints
 
@@ -23,6 +27,9 @@
   its ALSA controls and fails closed when FCP readiness is unavailable.
 - Keep device support capability-discovered. Do not hardcode device-specific
   control names into shared models or UI.
+- Reference-source findings are hypotheses only. Confirm current IDs, bounds,
+  access, availability, and unambiguous relationships through bounded runtime
+  discovery before exposing a capability or write path.
 
 ## Engineering workflow
 
@@ -35,6 +42,10 @@
 - Run mock/unit tests before hardware tests.
 - Hardware validation runs on target Linux hardware; QEMU cannot validate USB
   control behavior.
+- Before using any material from the ignored reference checkout, refresh it
+  with `git -C externals/alsa-scarlett-gui pull --ff-only`. If it is absent,
+  clone `https://github.com/geoffreybennett/alsa-scarlett-gui.git` there; keep
+  `externals/` ignored and never stage its contents.
 - Prefer small, standard-library solutions. Do not add abstractions before a
   second real caller needs them.
 - Keep relevant documentation current when scope or decisions change.
