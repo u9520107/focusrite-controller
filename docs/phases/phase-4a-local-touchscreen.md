@@ -2,12 +2,12 @@
 
 ## Status
 
-MR 1 is merged as `4698fcf` on `main`. Mock verification and Pi read-only
-socket smoke validation are complete. Next proposed work is MR 2a: add the
-small capability-presentation contract required for a generic touchscreen.
-The presentation proposal and target display/toolkit decision are accepted.
-Live-control implementation still requires separate mock-first verification and
-explicit hardware-write approval.
+MR 1 is merged as `4698fcf` on `main`. MR 2a/2b are complete on this branch:
+additive capability-presentation metadata, generic fullscreen client, mock IPC
+coverage, and read-only Pi kiosk/client-restart evidence. The client correctly
+shows no Solo strips when adapter presentation is absent; it never guesses
+control semantics. Phase 4a retains MR 3 profiles. Live-control implementation
+requires separate mock-first verification and explicit hardware-write approval.
 
 UX review brief: [Phase 4a UX design](../design/phase-4a-ux.md).
 
@@ -99,7 +99,7 @@ write needs separate explicit approval.
   they require attached hardware. Unix-socket tests require an environment
   permitted to bind local sockets; they passed outside this development sandbox.
 
-### MR 2a proposal: Capability presentation contract
+### MR 2a: Capability presentation contract — complete
 
 **Why first**
 
@@ -140,6 +140,14 @@ no-device-specific-UI rule.
   capability data.
 - Existing IPC v1 clients remain compatible because fields are additive.
 - Full Rust verification passes; no Pi interaction required.
+
+**Evidence — complete**
+
+- `ControlPresentation` is additive in snapshot/event IPC messages. Mock
+  coverage proves serialized display metadata and dashboard selection without
+  client control-ID matching.
+- Existing v1 clients remain compatible; presentation is optional and absent
+  controls stay hidden.
 
 **Solo adapter evidence — implementation deferred to Phase 4c MR2c**
 
@@ -206,7 +214,7 @@ knobs. They are not separate software output tracks.
   and rejection. A read-only Pi snapshot and any approved reversible hardware
   operation use the Phase 4c restore procedure.
 
-### MR 2b proposal: Fullscreen touch client and primary controls
+### MR 2b: Fullscreen touch client and primary controls — complete
 
 **Scope**
 
@@ -262,6 +270,20 @@ knobs. They are not separate software output tracks.
 
 Display and touch interaction. Read-only fullscreen test needs explicit
 approval. Live control write needs separate explicit approval.
+
+**Implementation evidence — complete**
+
+- `focusrite-ui` uses only local v1 IPC, resyncs from authoritative snapshots,
+  and includes deterministic mock coverage for command framing, confirmed
+  state, reconnect behavior, groups, rate limiting, lock, and read-only mode.
+- Pi read-only fullscreen/kiosk evidence is recorded above. The attached Solo
+  published no safe presentation controls, so UI rendered no guessed strips
+  and sent no hardware command.
+- **Evidence — 2026-07-20 (complete):** with explicit read-only approval, a
+  disposable daemon/socket/profile/dashboard setup ran on Pi. A snapshot-only
+  socket probe succeeded before and after killing the read-only UI. The daemon
+  remained alive, restarted UI remained alive, and no temporary profile or
+  dashboard file was created. No device command was sent.
 
 ### Runtime safety proposal: idle, cat lock, and shutdown
 
@@ -365,12 +387,12 @@ requires explicit approval.
 
 ## Exit checks
 
-- [ ] Daemon exposes versioned, bounded local snapshot/command/event API.
-- [ ] Socket clients cannot access USB or ALSA and cannot interrupt daemon on
+- [x] Daemon exposes versioned, bounded local snapshot/command/event API.
+- [x] Socket clients cannot access USB or ALSA and cannot interrupt daemon on
   failure.
-- [ ] Mock IPC tests cover ordering, reconnect/resync, and concurrent local
+- [x] Mock IPC tests cover ordering, reconnect/resync, and concurrent local
   client updates.
-- [ ] Fullscreen Pi touchscreen exposes only daemon-declared controls and
+- [x] Fullscreen Pi touchscreen exposes only daemon-declared controls and
   remains usable after client restart. Hardware capability inference is Phase
   4c MR2c, not a Phase 4a gate.
 - [ ] Local profile save/list/dry-run/reviewed apply returns safe per-control

@@ -70,12 +70,11 @@ deployment prerequisites are recorded.
 Execution plan: [Phase 4a local touchscreen plan](phases/phase-4a-local-touchscreen.md).
 
 MR 1 provides merged versioned Unix-socket snapshot, command, and event
-messages. Next proposed slice, MR 2a, adds capability presentation metadata so
-touchscreen renders safe adapter-default level/mute strips without device-
-specific IDs. MR 2b then builds smallest fullscreen client using local API
-only. Phase 4c later adds persisted dashboard configuration, groups, and sync
-sets. Local profile workflow remains MR 3: save/list, binding/diff dry-run,
-reviewed apply, and per-control results.
+messages. MR 2a adds additive capability presentation metadata; MR 2b adds the
+fullscreen local client and read-only Pi kiosk evidence, including client
+restart with daemon continuity. Phase 4c adds persisted dashboard configuration
+and mock-only groups independently. Local profile workflow remains MR 3:
+save/list, binding/diff dry-run, reviewed apply, and per-control results.
 
 Exit: hardware controller works from Pi display; touchscreen-client crash does
 not affect daemon; mock IPC tests cover command ordering, reconnect, and
