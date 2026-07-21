@@ -252,14 +252,19 @@ fn handle_request<D: Device>(
             reply,
         } => {
             let result = dashboard
-                .level_groups
-                .iter()
-                .find(|item| item.id == group)
-                .ok_or(WorkerError::UnknownGroup)
-                .and_then(|group| {
-                    service
-                        .command_level_group(&group.level_group(), position)
-                        .map_err(WorkerError::Group)
+                .validate_for(service.snapshot())
+                .map_err(|error| WorkerError::Dashboard(error.to_string()))
+                .and_then(|_| {
+                    dashboard
+                        .level_groups
+                        .iter()
+                        .find(|item| item.id == group)
+                        .ok_or(WorkerError::UnknownGroup)
+                        .and_then(|group| {
+                            service
+                                .command_level_group(&group.level_group(), position)
+                                .map_err(WorkerError::Group)
+                        })
                 })
                 .map(|result| (state(service, dashboard), result));
             let _ = reply.send(result);
@@ -306,6 +311,28 @@ mod tests {
 
         fn write(&mut self, control: &ControlId, value: Value) -> Result<(), DeviceError> {
             self.0.values.insert(control.clone(), value);
+            Ok(())
+        }
+    }
+
+    struct SchemaDriftDevice {
+        snapshot: DeviceSnapshot,
+        drifted: bool,
+        writes: Arc<Mutex<Vec<(ControlId, Value)>>>,
+    }
+
+    impl Device for SchemaDriftDevice {
+        fn snapshot(&mut self) -> Result<DeviceSnapshot, DeviceError> {
+            let mut snapshot = self.snapshot.clone();
+            if self.drifted {
+                snapshot.capability_schema = "mock-v2".into();
+            }
+            self.drifted = true;
+            Ok(snapshot)
+        }
+
+        fn write(&mut self, control: &ControlId, value: Value) -> Result<(), DeviceError> {
+            self.writes.lock().unwrap().push((control.clone(), value));
             Ok(())
         }
     }
@@ -451,6 +478,77 @@ mod tests {
         assert_eq!(result.applied, vec![first.clone(), second.clone()]);
         assert_eq!(state.snapshot.values[&first], Value::Integer(75));
         assert_eq!(state.snapshot.values[&second], Value::Integer(50));
+        worker.stop().unwrap();
+    }
+
+    #[test]
+    fn schema_drift_rejects_persisted_group_without_writes() {
+        let first = ControlId("output.volume".into());
+        let second = ControlId("optical.volume".into());
+        let snapshot = DeviceSnapshot {
+            device_id: "mock-device".into(),
+            capability_schema: "mock-v1".into(),
+            capabilities: vec![
+                ControlCapability {
+                    id: first.clone(),
+                    domain: ValueDomain::Integer,
+                    writable: true,
+                    available: true,
+                    minimum: Some(0),
+                    maximum: Some(100),
+                    group: Some(GroupCapability {
+                        operation: GroupOperation::RelativeLevel,
+                    }),
+                    presentation: None,
+                },
+                ControlCapability {
+                    id: second.clone(),
+                    domain: ValueDomain::Integer,
+                    writable: true,
+                    available: true,
+                    minimum: Some(0),
+                    maximum: Some(100),
+                    group: Some(GroupCapability {
+                        operation: GroupOperation::RelativeLevel,
+                    }),
+                    presentation: None,
+                },
+            ],
+            values: BTreeMap::from([
+                (first.clone(), Value::Integer(50)),
+                (second.clone(), Value::Integer(25)),
+            ]),
+        };
+        let dashboard = DashboardConfig {
+            version: 2,
+            device_id: "mock-device".into(),
+            capability_schema: "mock-v1".into(),
+            controls: Vec::new(),
+            level_groups: vec![DashboardLevelGroup {
+                id: "linked".into(),
+                label: "Linked".into(),
+                members: vec![first, second],
+                anchor: ControlId("output.volume".into()),
+            }],
+        };
+        let writes = Arc::new(Mutex::new(Vec::new()));
+        let worker = DeviceWorker::start_with_dashboard(
+            SchemaDriftDevice {
+                snapshot,
+                drifted: false,
+                writes: Arc::clone(&writes),
+            },
+            Profiles::new(),
+            Some(dashboard),
+        )
+        .unwrap();
+
+        worker.refresh().unwrap();
+        assert!(matches!(
+            worker.command_level_group("linked".into(), 750),
+            Err(WorkerError::Dashboard(_))
+        ));
+        assert!(writes.lock().unwrap().is_empty());
         worker.stop().unwrap();
     }
 

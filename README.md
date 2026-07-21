@@ -28,6 +28,21 @@ Audio stays on external devices connected to Focusrite inputs. This project
 controls hardware mixer/routing settings; it does not carry, process, record,
 or play host audio in v1.
 
+This is a personal convenience controller for a small set of declared
+multi-device and multi-output workflows, not a Linux replacement for Focusrite
+Control 2. Unsupported mixer, routing, input-gain, balance, and advanced
+device features stay hidden rather than being pursued for feature parity.
+
+## External reference
+
+`externals/alsa-scarlett-gui` is an ignored checkout of the upstream Linux
+control-panel project. Use it as design and device-behavior reference, then
+prove the attached device's capability shape through this project's bounded
+runtime discovery. Never copy, link, or derive product code from it: the
+reference project is GPL-3.0-or-later while this project is MIT. Refresh the
+checkout with `git -C externals/alsa-scarlett-gui pull --ff-only` before new
+device-support research.
+
 ## Planned support
 
 | Device family | Intended role | Linux path |

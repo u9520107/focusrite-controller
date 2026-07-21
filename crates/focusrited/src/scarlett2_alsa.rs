@@ -3,7 +3,7 @@
 //! Instances stay read-only unless constructed with an explicitly approved
 //! discovered boolean control for a bounded hardware test.
 
-use std::{collections::BTreeSet, time::Duration};
+use std::{collections::BTreeSet, ffi::CString, ptr, time::Duration};
 
 use alsa::{
     ctl::{Ctl, ElemType, ElemValue},
@@ -31,8 +31,66 @@ pub struct Control {
     pub value_type: ValueType,
     pub count: u32,
     pub values: Vec<ObservedValue>,
+    /// ALSA-declared range and increment for a single integer control.
+    pub integer_range: Option<IntegerRange>,
     /// A single unreadable control must not make the whole card offline.
     pub available: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct IntegerRange {
+    pub minimum: i32,
+    pub maximum: i32,
+    pub step: i32,
+}
+
+struct IntegerInfoCtl(*mut alsa_sys::snd_ctl_t);
+
+impl IntegerInfoCtl {
+    fn open(card: &str) -> Option<Self> {
+        let name = CString::new(format!("hw:{card}")).ok()?;
+        let mut control = ptr::null_mut();
+        (unsafe { alsa_sys::snd_ctl_open(&mut control, name.as_ptr(), 0) } >= 0)
+            .then_some(Self(control))
+    }
+
+    fn range(&self, numid: u32, value_type: ValueType, count: u32) -> Option<IntegerRange> {
+        if value_type != ValueType::Integer || count != 1 {
+            return None;
+        }
+        let mut info = ptr::null_mut();
+        if unsafe { alsa_sys::snd_ctl_elem_info_malloc(&mut info) } < 0 {
+            return None;
+        }
+        unsafe { alsa_sys::snd_ctl_elem_info_set_numid(info, numid) };
+        let result = if unsafe { alsa_sys::snd_ctl_elem_info(self.0, info) } >= 0 {
+            let (Ok(minimum), Ok(maximum), Ok(step)) = (unsafe {
+                (
+                    i32::try_from(alsa_sys::snd_ctl_elem_info_get_min(info)),
+                    i32::try_from(alsa_sys::snd_ctl_elem_info_get_max(info)),
+                    i32::try_from(alsa_sys::snd_ctl_elem_info_get_step(info)),
+                )
+            }) else {
+                unsafe { alsa_sys::snd_ctl_elem_info_free(info) };
+                return None;
+            };
+            Some(IntegerRange {
+                minimum,
+                maximum,
+                step,
+            })
+        } else {
+            None
+        };
+        unsafe { alsa_sys::snd_ctl_elem_info_free(info) };
+        result.filter(|range| range.minimum < range.maximum && range.step > 0)
+    }
+}
+
+impl Drop for IntegerInfoCtl {
+    fn drop(&mut self) {
+        unsafe { alsa_sys::snd_ctl_close(self.0) };
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -153,6 +211,7 @@ pub fn discover(card: &str) -> Result<Discovery, DiscoveryError> {
     control
         .load()
         .map_err(|error| DiscoveryError(error.to_string()))?;
+    let integer_info = IntegerInfoCtl::open(card);
 
     let controls = control
         .elem_iter()
@@ -171,11 +230,15 @@ pub fn discover(card: &str) -> Result<Discovery, DiscoveryError> {
                     value_type: ValueType::None,
                     count: 0,
                     values: Vec::new(),
+                    integer_range: None,
                     available: false,
                 });
             };
             let value_type = value_type(info.get_type());
             let count = info.get_count();
+            let integer_range = integer_info
+                .as_ref()
+                .and_then(|control| control.range(numid, value_type, count));
             match element.read() {
                 Ok(value) => Some(Control {
                     id: control_id(numid),
@@ -184,6 +247,7 @@ pub fn discover(card: &str) -> Result<Discovery, DiscoveryError> {
                     value_type,
                     count,
                     values: observed_values(&value, info.get_type(), count),
+                    integer_range,
                     available: true,
                 }),
                 Err(_) => Some(Control {
@@ -193,6 +257,7 @@ pub fn discover(card: &str) -> Result<Discovery, DiscoveryError> {
                     value_type,
                     count,
                     values: Vec::new(),
+                    integer_range,
                     available: false,
                 }),
             }
@@ -241,8 +306,8 @@ fn snapshot_from(discovery: Discovery, writable_controls: &BTreeSet<ControlId>) 
                 && control.values.len() == 1
                 && writable_controls.contains(&control.id),
             available: control.available,
-            minimum: None,
-            maximum: None,
+            minimum: control.integer_range.map(|range| range.minimum),
+            maximum: control.integer_range.map(|range| range.maximum),
             group: None,
             presentation: None,
         });
@@ -377,6 +442,7 @@ mod tests {
                     value_type: ValueType::Boolean,
                     count: 1,
                     values: vec![ObservedValue::Boolean(false)],
+                    integer_range: None,
                     available: true,
                 }],
             },
@@ -400,6 +466,7 @@ mod tests {
                     value_type: ValueType::Boolean,
                     count: 1,
                     values: vec![ObservedValue::Boolean(false)],
+                    integer_range: None,
                     available: true,
                 }],
             },
@@ -418,6 +485,7 @@ mod tests {
             value_type: ValueType::Boolean,
             count: 1,
             values: vec![ObservedValue::Boolean(false)],
+            integer_range: None,
             available: true,
         }];
         let original = schema_fingerprint(&controls);
@@ -454,6 +522,7 @@ mod tests {
                     value_type: ValueType::Boolean,
                     count: 1,
                     values: Vec::new(),
+                    integer_range: None,
                     available: false,
                 }],
             },
@@ -463,5 +532,35 @@ mod tests {
         assert_eq!(snapshot.capabilities[0].domain, ValueDomain::Boolean);
         assert!(!snapshot.capabilities[0].available);
         assert!(!snapshot.values.contains_key(&id));
+    }
+
+    #[test]
+    fn integer_range_reaches_read_only_capability() {
+        let snapshot = snapshot_from(
+            Discovery {
+                device_id: "mock-device".into(),
+                controls: vec![Control {
+                    id: control_id(49),
+                    name: "Mixer Level".into(),
+                    numid: 49,
+                    value_type: ValueType::Integer,
+                    count: 1,
+                    values: vec![ObservedValue::Integer(12)],
+                    integer_range: Some(IntegerRange {
+                        minimum: 0,
+                        maximum: 184,
+                        step: 1,
+                    }),
+                    available: true,
+                }],
+            },
+            &BTreeSet::new(),
+        );
+
+        let capability = &snapshot.capabilities[0];
+        assert_eq!(capability.minimum, Some(0));
+        assert_eq!(capability.maximum, Some(184));
+        assert!(!capability.writable);
+        assert!(capability.group.is_none());
     }
 }

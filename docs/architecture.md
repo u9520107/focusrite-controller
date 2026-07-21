@@ -8,6 +8,11 @@ optional named profiles. It configures hardware mixer/routing settings, but
 does not carry, process, record, or play host audio. Live audio meters are
 deferred.
 
+It is not a Focusrite Control 2 replacement. Product work targets only
+declared personal convenience workflows: selecting and controlling proven
+multi-device or multi-output paths. Feature parity, broad input processing,
+and exposing every discovered device control are explicitly out of scope.
+
 ## Ownership
 
 ```text
@@ -99,6 +104,11 @@ Controls that are physical-only or otherwise not writable through the daemon are
 hidden by default. If a user tries to enable their display, the UI must warn
 that the control cannot be changed remotely and must never present it as an
 actionable slider/button.
+
+Discovered controls without a current personal-workflow need remain hidden,
+even when their hardware semantics could later be proven. This includes Solo
+Direct Monitor source levels and A/B balance: physical input/output controls
+are sufficient for current use.
 
 Dangerous controls need explicit confirmation. Firmware update and factory reset
 are outside v1.

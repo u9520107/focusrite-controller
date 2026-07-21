@@ -138,8 +138,9 @@ clients; macro-pad failure or removal does not affect daemon/device operation.
 
 When hardware becomes available, run bounded read-only discovery on direct
 Linux first, then validate FCP, `fcp-server`, ALSA controls, lifecycle, and
-reconciliation on Pi. Harden service behavior from those findings. Solo success
-does not imply 16i16 routing or monitor-group support.
+reconciliation on Pi. Harden service behavior from those findings. Follow the
+[16i16 reference review and validation boundary](hardware-support.md#scarlett-16i16-4th-gen).
+Solo success does not imply 16i16 routing or monitor-group support.
 
 Exit: sanitized 16i16 evidence proves supported controls and Pi FCP readiness;
 service handles FCP recovery, external changes, and documented unsupported

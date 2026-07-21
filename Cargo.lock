@@ -712,6 +712,7 @@ name = "focusrited"
 version = "0.1.0"
 dependencies = [
  "alsa",
+ "alsa-sys",
  "libc",
  "serde",
  "serde_json",

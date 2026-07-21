@@ -2,11 +2,12 @@
 
 ## Status
 
-In progress. MR 1a implements versioned, device-bound leaf-control metadata,
-atomic persistence, daemon validation, and additive local-IPC delivery. Import
-CLI and group definitions remain separate reviewable work. This phase is
-required for configured dashboard tracks and linked input/output controls; it
-does not add meters, LAN serving, browser UI, or hardware routing changes.
+In progress. MR 1 delivers versioned, device-bound dashboard metadata and
+read-only CLI import/export. MR 2a/2b deliver persisted mock-only relative
+groups through service, worker, local IPC, and touchscreen. Remaining MR 2
+slices add adaptive adapter declarations, native/device-specific operations,
+mirrors, and synchronized sets. This phase does not add meters, LAN serving,
+browser UI, or unapproved hardware routing changes.
 
 ## Goal
 
@@ -49,11 +50,9 @@ configuration through validated CLI import/export before Phase 5 web editing.
   write echoes, and serializes simultaneous changes as last confirmed change
   wins.
 - Relative level balance is preserved for compatible non-native level groups.
-- Solo 4th Gen Direct Monitor is a special mapped group: eight raw ALSA gain
-  cells form two output sides by four documented sources. Raw cells are never
-  dashboard tracks. Adapter declares the source-to-cell operation and its
-  balance/pan preservation rule; `USB Playback 1/2` can then appear as initial
-  tracks, while Analogue 1/2 remain separate soft-disabled candidates.
+- Solo 4th Gen Direct Monitor source-level and A/B-balance mapping is deferred.
+  It is not needed for current personal workflows. Its eight raw ALSA gain
+  cells remain adapter-private and are never dashboard tracks.
 - Solo's four Direct Monitor sources feed one shared monitor/headphone mix.
   The physical line-output and headphone paths are duplicated post-mix, with
   their own hardware knobs; they are not two software output tracks and must
@@ -124,7 +123,7 @@ configuration through validated CLI import/export before Phase 5 web editing.
 
 ### MR 2: Virtual group service semantics
 
-**MR 2a in progress**
+**MR 2a/2b complete — mock-only relative groups**
 
 - Core mock-only validation accepts two-or-more unique discovered writable
   integer leaf controls with declared bounds. It maps canonical `0..=1000`
@@ -146,6 +145,14 @@ configuration through validated CLI import/export before Phase 5 web editing.
   explicitly declares `relative_level`. Current ALSA discovery declares none;
   mock-only groups remain available for service, IPC, and UI coverage until an
   adapter has reviewed level-control declarations.
+- Each group command revalidates persisted dashboard device/schema binding
+  against the current authoritative snapshot. Capability drift rejects the
+  command before any member write.
+- Adapter mappings are structural and adaptive: use discovered IDs, bounds,
+  steps, and unique control-relationship shape at runtime. Fingerprints aid
+  diagnostics but do not reject benign driver/firmware drift. Withhold a
+  logical writable capability only for missing, contradictory, or ambiguous
+  shape; never guess between candidates.
 
 **Scope**
 
@@ -171,6 +178,87 @@ configuration through validated CLI import/export before Phase 5 web editing.
   automatically until next user or external confirmed member change.
 - Extend local IPC with explicit group command/result messages only after mock
   service behavior is complete.
+
+### MR 2c: Adaptive adapter declarations
+
+**First slice complete — read-only integer metadata**
+
+- Scarlett2 discovery now retains ALSA-declared minimum, maximum, and positive
+  step for single integer controls, and delivers its bounds in existing
+  capabilities. It remains read-only and declares no `relative_level` support.
+- This uses direct `alsa-sys 0.6.0` (MIT) only for three missing safe-wrapper
+  `ElemInfo` accessors; it is already transitive through `alsa 0.12.0`.
+
+**Plan**
+
+1. Extend read-only ALSA/FCP discovery to retain integer bounds and real step
+   metadata; no write enablement in this slice.
+2. Define adapter-local structural rules from control type/count/access,
+   companions, and complete relationship shape. Resolve current IDs/ranges at
+   runtime; do not bind rules to card index, numid, firmware version, or exact
+   fingerprint.
+3. Require exactly one complete match before emitting `relative_level` or a
+   future compound operation. Missing, contradictory, or ambiguous matches
+   remain read-only/unavailable with sanitized diagnostic reason.
+4. Add sanitized fixtures proving one recognized shape plus benign numid/range
+   drift. Add negative fixtures for missing and ambiguous shapes.
+5. Keep Solo Direct Monitor raw cells adapter-private. Its logical source
+   operation is deferred until an actual personal workflow needs it.
+
+**Verification**
+
+- Mock fixture tests show ID/order/range drift preserves a unique mapping.
+- Missing or ambiguous shape emits no writable logical capability and performs
+  no write.
+- Any hardware session remains read-only unless separately approved with a
+  restore plan.
+
+### MR 2d: Native and device-specific group operations
+
+**Plan**
+
+1. Add adapter-owned native group delegation only where discovery proves an
+   explicit hardware link/control. Never emulate a declared native operation.
+2. Do not add Solo Direct Monitor logical source operations in this phase;
+   keep all raw matrix cells hidden and adapter-private.
+3. Return the same ordered applied/skipped/failed result shape for native and
+   compound operations. Do not claim atomicity unless hardware proves it.
+
+**Verification**
+
+- Mock native and compound paths cover success, partial failure, external
+  change, reconnect, and individual member command after group command.
+- Any live operation requires explicit approval, recorded starting values, and
+  a reviewed restore plan.
+
+### MR 2e: One-way mirror bindings
+
+**Plan**
+
+1. Persist validated source/target mapping with explicit disabled-by-default
+   state and adapter-declared operation compatibility.
+2. Reject cycles; route writes through serial worker; confirm target state.
+3. Report target partial failure without rolling back confirmed source state.
+
+**Verification**
+
+- Mock source event, disabled binding, target failure, cycle rejection, and
+  reconnect coverage.
+
+### MR 2f: Synchronized level sets
+
+**Plan**
+
+1. Persist explicit compatible members and one canonical normalized mapping.
+2. Propagate any confirmed member change through serial worker; prevent echo
+   loops with generation/origin/expected-confirmation tracking.
+3. Reject overlapping sets; serialize concurrent updates as last confirmed
+   change wins; report degraded target failure without automatic retry.
+
+**Verification**
+
+- Mock main-knob event, UI event from any member, three-or-more members,
+  unequal ranges, echo suppression, concurrent changes, and degraded failure.
 
 **Verification**
 

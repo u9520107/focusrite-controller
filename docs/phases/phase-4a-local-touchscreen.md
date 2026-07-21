@@ -141,7 +141,14 @@ no-device-specific-UI rule.
 - Existing IPC v1 clients remain compatible because fields are additive.
 - Full Rust verification passes; no Pi interaction required.
 
-**Solo adapter evidence and implementation proposal — pending approval**
+**Solo adapter evidence — implementation deferred to Phase 4c MR2c**
+
+Phase 4a owns generic presentation metadata and a client that consumes only
+daemon-declared controls. It does not need to lock down a hardware capability
+mapping. Phase 4c MR2c owns adaptive structural inference, integer metadata,
+logical compound operations, and any later write approval. This evidence stays
+here as Phase 4a discovery context; its implementation plan is authoritative in
+[Phase 4c](phase-4c-dashboard-groups.md).
 
 Dynamic ALSA discovery is necessary but not sufficient: it proves a control's
 existence, type, bounds, and current availability, but not its user meaning,
@@ -169,38 +176,35 @@ All four Solo Direct Monitor sources feed one shared monitor/headphone mix;
 line and headphone output paths duplicate that mix after it, with physical
 knobs. They are not separate software output tracks.
 
-- Extend raw ALSA discovery with integer minimum, maximum, and step. Preserve
-  raw ALSA name only inside adapter discovery; clients continue receive opaque
-  IDs plus adapter-declared presentation.
-- Add Solo availability mapping only for the eight discovered `Monitor Mix`
-  cells, matched by the expected product capability shape and driver names.
-  Do not use client-side name matching or make broad integer controls writable.
+- Phase 4c MR2c extends raw ALSA discovery with integer minimum, maximum, and
+  step, then resolves an adaptive structural mapping. Preserve raw ALSA name
+  only inside adapter discovery; clients continue receive opaque IDs plus
+  adapter-declared presentation.
+- Phase 4c MR2c may map the eight discovered `Monitor Mix` cells only after a
+  unique reviewed structural match. Do not use client-side name matching or
+  make broad integer controls writable.
 - A user-facing Direct Monitor source is a compound matrix operation, not one
   raw cell: its group changes required A/B cells together while retaining
   source balance/pan rules. Therefore `USB Playback 1/2` and analogue source
-  strips wait for Phase 4c group/compound-command semantics. Raw cells remain
-  hidden/non-writable until that work exists.
+  strips are deferred: they are not needed for current personal workflows.
+  Raw cells remain hidden/non-writable.
 - All other internal mixer controls, Direct Monitor, phantom power, routing
   enums, meters, and arrays remain hidden/non-writable.
-- Keep hardware write policy fail-closed until mock command coverage proves
-  range/type rejection and explicit user approval permits one reversible Solo
-  fader write. No implementation step sends a live command by default.
+- Phase 4c keeps hardware write policy fail-closed until mock command coverage
+  proves range/type rejection and explicit user approval permits one reversible
+  Solo operation. No implementation step sends a live command by default.
 - Dashboard capacity remains 12. No default-control selection is needed for
   Solo until the four Direct Monitor tracks are proven; larger devices use
   Settings availability/list behavior from Phase 4c.
-- Phase 4c defaults show USB Playback 1 and USB Playback 2 as the first
-  compound Direct Monitor tracks. `Analogue 1` and `Analogue 2` remain separate
-  and soft-disabled by default: Input 1 is front line/instrument and Input 2
-  is rear XLR microphone with 48V, each with a physical preamp-gain knob.
-  Enabling an analogue channel later changes only its Direct Monitor mix trim,
-  never its preamp gain, but is still an audible-routing change.
+- Solo Direct Monitor source tracks, including `USB Playback 1/2`, are
+  deferred. Input 1 and Input 2 retain their physical preamp-gain knobs;
+  current use does not need touchscreen direct-mix control.
 - Main output is hardware-knob-only. A later read-only output meter may use the
   discovered meter capability after its format and scale are proven; it is not
   a substitute for an output fader and is outside this first control slice.
-- Verification: fixture tests for names/bounds/presentation/order, mock IPC
-  command confirmation and rejection, read-only Pi snapshot showing declared
-  controls, then one approved reversible live fader test with baseline and
-  restore procedure.
+- Phase 4c verifies fixture shape/inference plus mock IPC command confirmation
+  and rejection. A read-only Pi snapshot and any approved reversible hardware
+  operation use the Phase 4c restore procedure.
 
 ### MR 2b proposal: Fullscreen touch client and primary controls
 
@@ -366,8 +370,9 @@ requires explicit approval.
   failure.
 - [ ] Mock IPC tests cover ordering, reconnect/resync, and concurrent local
   client updates.
-- [ ] Fullscreen Pi touchscreen exposes only capability-discovered controls and
-  remains usable after client restart.
+- [ ] Fullscreen Pi touchscreen exposes only daemon-declared controls and
+  remains usable after client restart. Hardware capability inference is Phase
+  4c MR2c, not a Phase 4a gate.
 - [ ] Local profile save/list/dry-run/reviewed apply returns safe per-control
   result and never auto-applies.
 
