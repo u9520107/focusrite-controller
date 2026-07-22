@@ -101,6 +101,90 @@ pub struct Profile {
     pub values: BTreeMap<ControlId, Value>,
 }
 
+/// A client-visible review handle. It binds an apply request to one observed
+/// profile and authoritative device revision; it is not an authentication token.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ProfileReview {
+    pub revision: u64,
+    pub fingerprint: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileBinding {
+    Match,
+    Mismatch,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileSkipReason {
+    Unchanged,
+    UnknownControl,
+    Unavailable,
+    ReadOnly,
+    InvalidValue,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+pub enum ProfilePreviewStatus {
+    Ready,
+    Skipped { reason: ProfileSkipReason },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ProfilePreviewEntry {
+    pub control: ControlId,
+    pub current: Option<Value>,
+    pub target: Value,
+    #[serde(flatten)]
+    pub status: ProfilePreviewStatus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ProfilePreview {
+    pub name: String,
+    pub binding: ProfileBinding,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review: Option<ProfileReview>,
+    pub entries: Vec<ProfilePreviewEntry>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+pub enum ProfileApplyStatus {
+    Applied,
+    Skipped { reason: ProfileSkipReason },
+    Failed { error: ProfileApplyError },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileApplyError {
+    DeviceError,
+    UnknownControl,
+    Unavailable,
+    ReadOnly,
+    InvalidValue,
+    UnconfirmedWrite,
+    InvalidProfileName,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ProfileApplyEntry {
+    pub control: ControlId,
+    #[serde(flatten)]
+    pub status: ProfileApplyStatus,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ProfileApplyResult {
+    pub name: String,
+    pub review: ProfileReview,
+    pub entries: Vec<ProfileApplyEntry>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeviceError {
     Offline,
@@ -129,8 +213,10 @@ pub enum ServiceError {
     ReadOnly,
     InvalidValue,
     UnconfirmedWrite,
+    InvalidProfileName,
     UnknownProfile,
     ProfileBindingMismatch,
+    ProfileReviewMismatch,
 }
 
 pub struct Service<D> {
@@ -338,7 +424,10 @@ impl<D: Device> Service<D> {
     }
 
     /// Saving is explicit. Nothing is applied during connect or reconnect.
-    pub fn save_profile(&mut self, name: String) {
+    pub fn save_profile(&mut self, name: String) -> Result<(), ServiceError> {
+        if name.is_empty() || name.len() > 64 || name.chars().any(char::is_control) {
+            return Err(ServiceError::InvalidProfileName);
+        }
         let values = self
             .snapshot
             .capabilities
@@ -359,6 +448,7 @@ impl<D: Device> Service<D> {
                 values,
             },
         );
+        Ok(())
     }
 
     pub fn profiles(&self) -> &BTreeMap<String, Profile> {
@@ -370,24 +460,142 @@ impl<D: Device> Service<D> {
         self.profiles = profiles;
     }
 
-    /// Profile writes are ordered by stable control ID. Hardware cannot make a
-    /// multi-control apply atomic; later persistence adds reviewed dry-runs.
-    pub fn apply_profile(&mut self, name: &str) -> Result<(), ServiceError> {
+    /// Reviews one saved profile without writing hardware.
+    pub fn review_profile(&self, name: &str) -> Result<ProfilePreview, ServiceError> {
         let profile = self
             .profiles
             .get(name)
-            .cloned()
             .ok_or(ServiceError::UnknownProfile)?;
         if profile.device_id != self.snapshot.device_id
             || profile.capability_schema != self.snapshot.capability_schema
         {
-            return Err(ServiceError::ProfileBindingMismatch);
+            return Ok(ProfilePreview {
+                name: name.into(),
+                binding: ProfileBinding::Mismatch,
+                review: None,
+                entries: Vec::new(),
+            });
         }
-        for (control, value) in profile.values {
-            self.command(&control, value)?;
-        }
-        Ok(())
+        let entries = profile
+            .values
+            .iter()
+            .map(|(control, target)| ProfilePreviewEntry {
+                control: control.clone(),
+                current: self.snapshot.values.get(control).cloned(),
+                target: target.clone(),
+                status: self.profile_preview_status(control, target),
+            })
+            .collect();
+        Ok(ProfilePreview {
+            name: name.into(),
+            binding: ProfileBinding::Match,
+            review: Some(ProfileReview {
+                revision: self.revision,
+                fingerprint: profile_fingerprint(name, profile),
+            }),
+            entries,
+        })
     }
+
+    /// Applies only an exact current review. Entries remain control-ID ordered;
+    /// failures do not roll back confirmed earlier writes.
+    pub fn apply_reviewed_profile(
+        &mut self,
+        name: &str,
+        review: &ProfileReview,
+    ) -> Result<ProfileApplyResult, ServiceError> {
+        let preview = self.review_profile(name)?;
+        let expected = preview
+            .review
+            .clone()
+            .ok_or(ServiceError::ProfileBindingMismatch)?;
+        if &expected != review {
+            return Err(ServiceError::ProfileReviewMismatch);
+        }
+        let mut entries = Vec::with_capacity(preview.entries.len());
+        for entry in preview.entries {
+            let status = match entry.status {
+                ProfilePreviewStatus::Skipped { reason } => ProfileApplyStatus::Skipped { reason },
+                ProfilePreviewStatus::Ready => match self.command(&entry.control, entry.target) {
+                    Ok(()) => ProfileApplyStatus::Applied,
+                    Err(error) => ProfileApplyStatus::Failed {
+                        error: profile_apply_error(error),
+                    },
+                },
+            };
+            entries.push(ProfileApplyEntry {
+                control: entry.control,
+                status,
+            });
+        }
+        Ok(ProfileApplyResult {
+            name: name.into(),
+            review: expected,
+            entries,
+        })
+    }
+
+    fn profile_preview_status(&self, control: &ControlId, target: &Value) -> ProfilePreviewStatus {
+        let Some(capability) = self
+            .snapshot
+            .capabilities
+            .iter()
+            .find(|capability| capability.id == *control)
+        else {
+            return ProfilePreviewStatus::Skipped {
+                reason: ProfileSkipReason::UnknownControl,
+            };
+        };
+        let reason = if !capability.available {
+            Some(ProfileSkipReason::Unavailable)
+        } else if !capability.writable {
+            Some(ProfileSkipReason::ReadOnly)
+        } else if !matches_domain(target, &capability.domain)
+            || matches!(target, Value::Integer(value) if capability.minimum.is_some_and(|minimum| *value < minimum) || capability.maximum.is_some_and(|maximum| *value > maximum))
+        {
+            Some(ProfileSkipReason::InvalidValue)
+        } else if self.snapshot.values.get(control) == Some(target) {
+            Some(ProfileSkipReason::Unchanged)
+        } else {
+            None
+        };
+        match reason {
+            Some(reason) => ProfilePreviewStatus::Skipped { reason },
+            None => ProfilePreviewStatus::Ready,
+        }
+    }
+}
+
+fn profile_apply_error(error: ServiceError) -> ProfileApplyError {
+    match error {
+        ServiceError::UnknownControl => ProfileApplyError::UnknownControl,
+        ServiceError::Unavailable => ProfileApplyError::Unavailable,
+        ServiceError::ReadOnly => ProfileApplyError::ReadOnly,
+        ServiceError::InvalidValue => ProfileApplyError::InvalidValue,
+        ServiceError::UnconfirmedWrite => ProfileApplyError::UnconfirmedWrite,
+        _ => ProfileApplyError::DeviceError,
+    }
+}
+
+fn profile_fingerprint(name: &str, profile: &Profile) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for bytes in [
+        name.as_bytes(),
+        profile.device_id.as_bytes(),
+        profile.capability_schema.as_bytes(),
+    ] {
+        for byte in bytes {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+    }
+    for (control, value) in &profile.values {
+        for byte in control.0.bytes().chain(format!("{value:?}").bytes()) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x100_0000_01b3);
+        }
+    }
+    hash
 }
 
 fn matches_domain(value: &Value, domain: &ValueDomain) -> bool {
@@ -725,29 +933,101 @@ mod tests {
     fn profile_needs_explicit_apply() {
         let volume = ControlId("output.volume".into());
         let mut service = Service::connect(mock()).unwrap();
-        service.save_profile("desk".into());
+        service.save_profile("desk".into()).unwrap();
         service.command(&volume, Value::Integer(75)).unwrap();
+        let review = service.review_profile("desk").unwrap().review.unwrap();
 
-        service.apply_profile("desk").unwrap();
+        let result = service.apply_reviewed_profile("desk", &review).unwrap();
 
         assert_eq!(service.snapshot().values[&volume], Value::Integer(50));
+        assert_eq!(result.entries[0].status, ProfileApplyStatus::Applied);
     }
 
     #[test]
     fn profile_does_not_apply_to_different_device_or_schema() {
         let mut service = Service::connect(mock()).unwrap();
-        service.save_profile("desk".into());
+        service.save_profile("desk".into()).unwrap();
         service.snapshot.device_id = "other-device".into();
 
         assert_eq!(
-            service.apply_profile("desk"),
-            Err(ServiceError::ProfileBindingMismatch)
+            service.review_profile("desk").unwrap().binding,
+            ProfileBinding::Mismatch
         );
         service.snapshot.device_id = "mock-device".into();
         service.snapshot.capability_schema = "mock-v2".into();
         assert_eq!(
-            service.apply_profile("desk"),
-            Err(ServiceError::ProfileBindingMismatch)
+            service.review_profile("desk").unwrap().binding,
+            ProfileBinding::Mismatch
+        );
+    }
+
+    #[test]
+    fn profile_review_skips_unavailable_control_without_writing() {
+        let volume = ControlId("output.volume".into());
+        let mut service = Service::connect(mock()).unwrap();
+        service.save_profile("desk".into()).unwrap();
+        service.snapshot.capabilities[0].available = false;
+
+        let preview = service.review_profile("desk").unwrap();
+
+        assert_eq!(preview.entries.len(), 1);
+        assert_eq!(
+            preview.entries[0].status,
+            ProfilePreviewStatus::Skipped {
+                reason: ProfileSkipReason::Unavailable
+            }
+        );
+        assert!(service.device.writes.is_empty());
+        assert_eq!(preview.entries[0].control, volume);
+    }
+
+    #[test]
+    fn profile_apply_requires_current_review_and_reports_partial_failure_in_order() {
+        let first = ControlId("a.volume".into());
+        let second = ControlId("output.volume".into());
+        let mut device = mock();
+        device.snapshot.capabilities.push(ControlCapability {
+            id: first.clone(),
+            domain: ValueDomain::Integer,
+            writable: true,
+            available: true,
+            minimum: Some(0),
+            maximum: Some(100),
+            group: None,
+            presentation: None,
+        });
+        device
+            .snapshot
+            .values
+            .insert(first.clone(), Value::Integer(50));
+        device.failed_control = Some(second.clone());
+        let mut service = Service::connect(device).unwrap();
+        service.save_profile("desk".into()).unwrap();
+        service
+            .snapshot
+            .values
+            .insert(first.clone(), Value::Integer(10));
+        service
+            .snapshot
+            .values
+            .insert(second.clone(), Value::Integer(20));
+        let review = service.review_profile("desk").unwrap().review.unwrap();
+
+        let result = service.apply_reviewed_profile("desk", &review).unwrap();
+
+        assert_eq!(service.device.writes, vec![first.clone(), second.clone()]);
+        assert_eq!(result.entries[0].control, first);
+        assert_eq!(result.entries[0].status, ProfileApplyStatus::Applied);
+        assert_eq!(result.entries[1].control, second);
+        assert_eq!(
+            result.entries[1].status,
+            ProfileApplyStatus::Failed {
+                error: ProfileApplyError::DeviceError
+            }
+        );
+        assert_eq!(
+            service.apply_reviewed_profile("desk", &review),
+            Err(ServiceError::ProfileReviewMismatch)
         );
     }
 }

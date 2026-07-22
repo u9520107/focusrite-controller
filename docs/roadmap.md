@@ -72,9 +72,11 @@ Execution plan: [Phase 4a local touchscreen plan](phases/phase-4a-local-touchscr
 MR 1 provides merged versioned Unix-socket snapshot, command, and event
 messages. MR 2a adds additive capability presentation metadata; MR 2b adds the
 fullscreen local client and read-only Pi kiosk evidence, including client
-restart with daemon continuity. Phase 4c adds persisted dashboard configuration
-and mock-only groups independently. Local profile workflow remains MR 3:
+restart with daemon continuity. MR 3 completes mock-safe local profile
 save/list, binding/diff dry-run, reviewed apply, and per-control results.
+Live Pi profile application is deferred to Phase 4c MR2c, which must first
+approve one reversible capability. Phase 4c also adds persisted dashboard
+configuration and mock-only groups independently.
 
 Exit: hardware controller works from Pi display; touchscreen-client crash does
 not affect daemon; mock IPC tests cover command ordering, reconnect, and

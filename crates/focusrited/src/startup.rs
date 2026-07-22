@@ -249,7 +249,7 @@ mod tests {
         };
         let store = ProfileStore::new(&path);
         let mut saved = Service::connect(device(50)).unwrap();
-        saved.save_profile("desk".into());
+        saved.save_profile("desk".into()).unwrap();
         store.save_service(&saved).unwrap();
 
         let restored = connect(device(75), &config).unwrap();

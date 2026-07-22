@@ -13,7 +13,8 @@ use std::{
 use eframe::egui;
 use focusrited::{
     ControlCapability, ControlId, ControlPresentation, DeviceSnapshot, GroupCapability,
-    GroupOperation, PresentationKind, Value, ValueDomain,
+    GroupOperation, PresentationKind, ProfileApplyResult, ProfilePreview, ProfileReview, Value,
+    ValueDomain,
     dashboard_store::{DashboardConfig, DashboardControl, DashboardLevelGroup},
 };
 use serde::Deserialize;
@@ -23,6 +24,16 @@ const COMMAND_INTERVAL: Duration = Duration::from_millis(33);
 const DEFAULT_AUTO_LOCK_AFTER: Duration = Duration::from_secs(60);
 const UNLOCK_TARGET_SIZE: f32 = 64.0;
 const UNLOCK_TIMEOUT: Duration = Duration::from_secs(5);
+const PROFILE_SLOTS: [&str; 8] = [
+    "Profile 1",
+    "Profile 2",
+    "Profile 3",
+    "Profile 4",
+    "Profile 5",
+    "Profile 6",
+    "Profile 7",
+    "Profile 8",
+];
 
 fn main() -> eframe::Result<()> {
     let (sender, receiver) = mpsc::channel();
@@ -131,6 +142,7 @@ struct Response {
     dashboard: Option<DashboardConfig>,
     error: Option<String>,
     group_result: Option<GroupCommandResult>,
+    profile_result: Option<ProfileResult>,
 }
 
 #[derive(Deserialize)]
@@ -145,6 +157,15 @@ struct GroupFailure {
     error: String,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+enum ProfileResult {
+    Saved { profiles: Vec<String> },
+    Listed { profiles: Vec<String> },
+    Reviewed { preview: ProfilePreview },
+    Applied { result: ProfileApplyResult },
+}
+
 enum SocketEvent {
     Connected,
     Disconnected,
@@ -156,6 +177,10 @@ enum ReaderRequest {
     Snapshot,
     Command(ControlId, Value),
     GroupCommand(String, u16),
+    ProfileSave(String),
+    ProfileList,
+    ProfileReview(String),
+    ProfileApply(String, ProfileReview),
 }
 
 fn write_request(writer: &mut UnixStream, request: ReaderRequest) -> std::io::Result<()> {
@@ -187,7 +212,31 @@ fn write_request(writer: &mut UnixStream, request: ReaderRequest) -> std::io::Re
             .map_err(std::io::Error::other)?;
             writer.write_all(b"\n")
         }
+        ReaderRequest::ProfileSave(name) => {
+            write_profile_request(writer, "profile_save", name, None)
+        }
+        ReaderRequest::ProfileList => writer.write_all(b"{\"v\":1,\"type\":\"profile_list\"}\n"),
+        ReaderRequest::ProfileReview(name) => {
+            write_profile_request(writer, "profile_review", name, None)
+        }
+        ReaderRequest::ProfileApply(name, review) => {
+            write_profile_request(writer, "profile_apply", name, Some(review))
+        }
     }
+}
+
+fn write_profile_request(
+    writer: &mut UnixStream,
+    kind: &str,
+    name: String,
+    review: Option<ProfileReview>,
+) -> std::io::Result<()> {
+    serde_json::to_writer(
+        &mut *writer,
+        &serde_json::json!({"v": 1, "type": kind, "name": name, "review": review}),
+    )
+    .map_err(std::io::Error::other)?;
+    writer.write_all(b"\n")
 }
 
 struct TouchscreenApp {
@@ -196,6 +245,9 @@ struct TouchscreenApp {
     connection: Connection,
     state: Option<ConfirmedState>,
     focus: Option<ControlId>,
+    profiles_open: bool,
+    profiles: Vec<String>,
+    profile_review: Option<ProfilePreview>,
     close_focus_next_frame: bool,
     demo: bool,
     read_only: bool,
@@ -283,6 +335,9 @@ impl TouchscreenApp {
             },
             state: demo.then(demo_state),
             focus: None,
+            profiles_open: false,
+            profiles: Vec::new(),
+            profile_review: None,
             close_focus_next_frame: false,
             demo,
             read_only: !demo && env::var_os("FOCUSRITE_UI_READ_ONLY").is_some(),
@@ -335,6 +390,41 @@ impl TouchscreenApp {
             self.toast = Some((error, Instant::now()));
             return;
         }
+        if let Some(profile_result) = response.profile_result {
+            match profile_result {
+                ProfileResult::Saved { profiles } | ProfileResult::Listed { profiles } => {
+                    self.profiles = profiles;
+                    self.profile_review = None;
+                }
+                ProfileResult::Reviewed { preview } => {
+                    self.profile_review = Some(preview);
+                }
+                ProfileResult::Applied { result } => {
+                    let applied = result
+                        .entries
+                        .iter()
+                        .filter(|entry| {
+                            matches!(entry.status, focusrited::ProfileApplyStatus::Applied)
+                        })
+                        .count();
+                    let failed = result
+                        .entries
+                        .iter()
+                        .filter(|entry| {
+                            matches!(entry.status, focusrited::ProfileApplyStatus::Failed { .. })
+                        })
+                        .count();
+                    self.profile_review = None;
+                    self.toast = Some((
+                        format!("{}: {applied} applied, {failed} failed", result.name),
+                        Instant::now(),
+                    ));
+                }
+            }
+            if !matches!(response.kind.as_str(), "profile_apply_result") {
+                return;
+            }
+        }
         let group_failure = response.group_result.as_ref().and_then(|result| {
             result.failed.as_ref().map(|failure| {
                 format!(
@@ -355,7 +445,11 @@ impl TouchscreenApp {
         };
         if !matches!(
             response.kind.as_str(),
-            "snapshot" | "event" | "command_result" | "group_command_result"
+            "snapshot"
+                | "event"
+                | "command_result"
+                | "group_command_result"
+                | "profile_apply_result"
         ) {
             return;
         }
@@ -573,6 +667,19 @@ impl eframe::App for TouchscreenApp {
                     self.lock();
                     log_debug(&mut self.debug, "manual lock");
                 }
+                if ui
+                    .add_sized([76.0, 32.0], egui::Button::new("Profiles"))
+                    .clicked()
+                {
+                    self.profiles_open = !self.profiles_open;
+                    if self.profiles_open
+                        && !self.demo
+                        && !self.read_only
+                        && let Some(sender) = &self.snapshot_sender
+                    {
+                        let _ = sender.send(ReaderRequest::ProfileList);
+                    }
+                }
             });
         });
         ui.add_space(8.0);
@@ -580,6 +687,7 @@ impl eframe::App for TouchscreenApp {
             ui.centered_and_justified(|ui| ui.label("Demo controls unavailable."));
             return;
         }
+        self.profile_panel_ui(ui.ctx());
         let Some(state) = &self.state else {
             ui.centered_and_justified(|ui| ui.label("Waiting for focusrited…"));
             return;
@@ -732,6 +840,81 @@ impl eframe::App for TouchscreenApp {
 }
 
 impl TouchscreenApp {
+    fn profile_panel_ui(&mut self, context: &egui::Context) {
+        if !self.profiles_open {
+            return;
+        }
+        let interactive = !self.demo && !self.read_only;
+        egui::Window::new("Profiles")
+            .default_pos(egui::pos2(180.0, 80.0))
+            .default_size(egui::vec2(440.0, 310.0))
+            .resizable(false)
+            .collapsible(false)
+            .show(context, |ui| {
+                ui.label("Fixed touchscreen slots. Rename later in configuration or web UI.");
+                if self.read_only {
+                    ui.label("Read-only mode: profile actions disabled.");
+                }
+                for slot in PROFILE_SLOTS {
+                    let saved = self.profiles.iter().any(|name| name == slot);
+                    ui.horizontal(|ui| {
+                        ui.label(slot);
+                        if saved {
+                            ui.label("saved");
+                        }
+                        if ui
+                            .add_enabled(interactive, egui::Button::new("Save"))
+                            .clicked()
+                        {
+                            self.profile_review = None;
+                            if let Some(sender) = &self.snapshot_sender {
+                                let _ = sender.send(ReaderRequest::ProfileSave(slot.into()));
+                            }
+                        }
+                        if ui
+                            .add_enabled(saved && interactive, egui::Button::new("Review"))
+                            .clicked()
+                        {
+                            self.profile_review = None;
+                            if let Some(sender) = &self.snapshot_sender {
+                                let _ = sender.send(ReaderRequest::ProfileReview(slot.into()));
+                            }
+                        }
+                    });
+                }
+                if let Some(preview) = self.profile_review.clone() {
+                    ui.separator();
+                    let ready = preview
+                        .entries
+                        .iter()
+                        .filter(|entry| {
+                            matches!(entry.status, focusrited::ProfilePreviewStatus::Ready)
+                        })
+                        .count();
+                    let skipped = preview.entries.len() - ready;
+                    if preview.binding == focusrited::ProfileBinding::Mismatch {
+                        ui.label("Profile does not match connected device.");
+                    } else {
+                        ui.label(format!(
+                            "{}: {ready} changes, {skipped} skipped",
+                            preview.name
+                        ));
+                        if let Some(review) = preview.review
+                            && ui
+                                .add_enabled(
+                                    interactive,
+                                    egui::Button::new("Apply reviewed profile"),
+                                )
+                                .clicked()
+                            && let Some(sender) = &self.snapshot_sender
+                        {
+                            let _ = sender.send(ReaderRequest::ProfileApply(preview.name, review));
+                        }
+                    }
+                }
+            });
+    }
+
     fn schedule_repaint(&self, context: &egui::Context, now: Instant) {
         let mut next = None;
         if !self.locked {
@@ -1500,6 +1683,90 @@ mod tests {
     }
 
     #[test]
+    fn profile_request_uses_fixed_slot_and_exact_review() {
+        assert_eq!(PROFILE_SLOTS[0], "Profile 1");
+        assert_eq!(PROFILE_SLOTS[7], "Profile 8");
+        let (mut client, server) = UnixStream::pair().unwrap();
+        let review = ProfileReview {
+            revision: 7,
+            fingerprint: 9,
+        };
+        write_request(
+            &mut client,
+            ReaderRequest::ProfileApply("Profile 1".into(), review),
+        )
+        .unwrap();
+        let mut line = String::new();
+        BufReader::new(server).read_line(&mut line).unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&line).unwrap(),
+            serde_json::json!({
+                "v": 1,
+                "type": "profile_apply",
+                "name": "Profile 1",
+                "review": {"revision": 7, "fingerprint": 9},
+            })
+        );
+    }
+
+    #[test]
+    fn profile_review_reply_gates_apply_result() {
+        let (_sender, receiver) = mpsc::channel();
+        let mut app = TouchscreenApp::new(receiver, None, false);
+        app.apply(Response {
+            version: 1,
+            kind: "profile_review_result".into(),
+            instance_id: None,
+            revision: None,
+            online: None,
+            snapshot: None,
+            dashboard: None,
+            error: None,
+            group_result: None,
+            profile_result: Some(ProfileResult::Reviewed {
+                preview: ProfilePreview {
+                    name: "Profile 1".into(),
+                    binding: focusrited::ProfileBinding::Match,
+                    review: Some(ProfileReview {
+                        revision: 2,
+                        fingerprint: 3,
+                    }),
+                    entries: Vec::new(),
+                },
+            }),
+        });
+        assert_eq!(
+            app.profile_review
+                .as_ref()
+                .and_then(|preview| preview.review.as_ref())
+                .map(|review| review.revision),
+            Some(2)
+        );
+        app.apply(Response {
+            version: 1,
+            kind: "profile_apply_result".into(),
+            instance_id: None,
+            revision: None,
+            online: None,
+            snapshot: None,
+            dashboard: None,
+            error: None,
+            group_result: None,
+            profile_result: Some(ProfileResult::Applied {
+                result: ProfileApplyResult {
+                    name: "Profile 1".into(),
+                    review: ProfileReview {
+                        revision: 2,
+                        fingerprint: 3,
+                    },
+                    entries: Vec::new(),
+                },
+            }),
+        });
+        assert!(app.profile_review.is_none());
+    }
+
+    #[test]
     fn group_failure_result_becomes_toast() {
         let (_sender, receiver) = mpsc::channel();
         let mut app = TouchscreenApp::new(receiver, None, false);
@@ -1514,6 +1781,7 @@ mod tests {
             dashboard: Some(state.dashboard.clone()),
             error: None,
             group_result: None,
+            profile_result: None,
         });
         app.apply(Response {
             version: 1,
@@ -1531,6 +1799,7 @@ mod tests {
                     error: "device_error".into(),
                 }),
             }),
+            profile_result: None,
         });
         assert_eq!(
             app.toast.as_ref().map(|(message, _)| message.as_str()),

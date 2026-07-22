@@ -14,6 +14,7 @@ use focusrited::{
     Device,
     dashboard_store::{DashboardConfig, DashboardStore},
     ipc::LocalServer,
+    profile_store::ProfileStore,
     scarlett2_alsa::Scarlett2Alsa,
     startup::{Config, ConfigError, DashboardAction, load_dashboard, load_profiles},
     worker::DeviceWorker,
@@ -41,8 +42,13 @@ fn main() {
     let profiles = load_profiles(&config).unwrap_or_else(|error| fail(error));
     let dashboard = load_dashboard(&config).unwrap_or_else(|error| fail(error));
     let worker = Arc::new(
-        DeviceWorker::start_with_dashboard(Scarlett2Alsa::new(card), profiles, dashboard)
-            .unwrap_or_else(|error| fail(error)),
+        DeviceWorker::start_with_dashboard_and_profile_store(
+            Scarlett2Alsa::new(card),
+            profiles,
+            dashboard,
+            Some(ProfileStore::new(&config.profile_store_path)),
+        )
+        .unwrap_or_else(|error| fail(error)),
     );
     install_shutdown_handler().unwrap_or_else(|error| fail(error));
     let ipc = LocalServer::start(Arc::clone(&worker), config.socket_path)

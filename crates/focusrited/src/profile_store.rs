@@ -303,7 +303,7 @@ mod tests {
         ));
         let store = ProfileStore::new(directory.join("profiles"));
         let mut original = service(50);
-        original.save_profile("desk".into());
+        original.save_profile("desk".into()).unwrap();
         store.save_service(&original).unwrap();
 
         let mut restored = service(75);
@@ -313,7 +313,8 @@ mod tests {
             restored.snapshot().values[&ControlId("output.level".into())],
             Value::Integer(75)
         );
-        restored.apply_profile("desk").unwrap();
+        let review = restored.review_profile("desk").unwrap().review.unwrap();
+        restored.apply_reviewed_profile("desk", &review).unwrap();
         assert_eq!(
             restored.snapshot().values[&ControlId("output.level".into())],
             Value::Integer(50)

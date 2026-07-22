@@ -6,8 +6,11 @@ MR 1 is merged as `4698fcf` on `main`. MR 2a/2b are complete on this branch:
 additive capability-presentation metadata, generic fullscreen client, mock IPC
 coverage, and read-only Pi kiosk/client-restart evidence. The client correctly
 shows no Solo strips when adapter presentation is absent; it never guesses
-control semantics. Phase 4a retains MR 3 profiles. Live-control implementation
-requires separate mock-first verification and explicit hardware-write approval.
+control semantics. MR 3 local profile workflow is complete: atomic fixed-slot
+save/list/review/reviewed-apply semantics, local IPC, touchscreen flow, and
+mock coverage. Live Pi profile application is deferred to Phase 4c MR2c: it
+needs one uniquely identified, policy-approved reversible control and explicit
+hardware-write approval.
 
 UX review brief: [Phase 4a UX design](../design/phase-4a-ux.md).
 
@@ -361,7 +364,49 @@ control write or change hardware state.
   disposable socket: `SIGTERM` caused the daemon to stop and remove its socket
   without creating a profile artifact or receiving a control command.
 
-### MR 3: Local profile workflow
+### MR 3: Local profile workflow — complete
+
+**Execution plan**
+
+1. Define service-owned profile preview/result types. A preview binds one
+   stored name to current device identity and schema, then walks saved control
+   IDs in `BTreeMap` order. Each entry is `unchanged`, `ready`, or `skipped`
+   with a stable reason; a binding mismatch produces no write candidates.
+2. Make `save_profile` persist only currently available writable values through
+   the existing atomic `ProfileStore`. Validate names at the public boundary;
+   saving never writes device state. Expose list metadata, not raw stored
+   values, to clients.
+3. Require apply to name an exact reviewed preview token derived from profile
+   contents plus current device/schema/revision. Reject stale, mismatched, or
+   unreviewed apply requests before a write. Apply `ready` entries in stable
+   control-ID order through normal service validation; continue after an
+   individual failure and return applied/skipped/failed per-control results.
+4. Add worker requests for save, list, preview, and confirmed apply. Persist
+   only after a successful save request; keep all hardware writes on its
+   serial worker thread. Add mock tests for binding mismatch, unavailable
+   controls, deterministic ordering, partial failure, stale review, reconnect,
+   and concurrent callers.
+5. Add additive local IPC messages and result payloads only after worker tests
+   pass. Touchscreen initially presents save/list/preview/reviewed-apply state
+   from those payloads; no optimistic profile state and no hidden apply path.
+6. Run full Rust checks. Pi profile save requires no device write but any Pi
+   profile apply remains blocked on a reviewed restore procedure and explicit
+   hardware-write approval.
+
+**Implementation evidence — complete; live Pi apply deferred to Phase 4c**
+
+- The serial worker owns atomic named-profile persistence. Mock coverage proves
+  save/list, binding mismatch, unavailable skips, stable ordered partial
+  failure, stale-review rejection, restart persistence, and local-socket
+  save/review/apply replies with confirmed post-apply state.
+- `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  and `cargo test --workspace` pass. The suite has 54 daemon tests, 13 UI
+  tests, one integration test, and three ignored target-hardware tests.
+- Touchscreen exposes fixed `Profile 1` through `Profile 8` slots: Save,
+  Review, then Apply reviewed profile. No name-entry keyboard or rename UI is
+  included. Configuration or later web UX owns renaming. Read-only mode sends
+  no profile request. UI mock coverage proves exact review forwarding and that
+  apply state clears the local review gate.
 
 **Scope**
 
@@ -385,6 +430,29 @@ control write or change hardware state.
 Profile save may write only service storage. Profile apply writes hardware and
 requires explicit approval.
 
+**Approved-apply restore procedure (prepare only; do not execute yet)**
+
+1. Confirm a current snapshot declares exactly one capability as available,
+   writable, and explicitly approved for this test. Reject controls that alter
+   phantom power, clock/source, routing, reset, firmware, or any ambiguous
+   matrix cell. Current Solo policy declares none, so this procedure currently
+   stops here without a write.
+2. Record a sanitized local baseline for that one control and its confirmed
+   value. Create a disposable profile-store path and save a named fixed slot;
+   verify its review shows the expected binding and one reversible diff.
+3. With separate explicit hardware-write approval, change only that approved
+   control through a mock-validated local IPC command, confirm the daemon
+   snapshot, then review and apply the saved profile once.
+4. Confirm the baseline value returned, record per-control apply results, and
+   stop the disposable daemon. Remove only the disposable profile-store/socket
+   paths. Do not commit snapshot values, device IDs, or raw control names.
+5. If any confirmation, binding, or ordering result differs, stop immediately.
+   Do not retry or attempt rollback beyond the reviewed single-control restore.
+
+Live Pi profile apply is deferred to Phase 4c MR2c. This procedure becomes
+executable only when that work approves a uniquely identified reversible
+control; it is not authorization to write hardware.
+
 ## Exit checks
 
 - [x] Daemon exposes versioned, bounded local snapshot/command/event API.
@@ -395,7 +463,7 @@ requires explicit approval.
 - [x] Fullscreen Pi touchscreen exposes only daemon-declared controls and
   remains usable after client restart. Hardware capability inference is Phase
   4c MR2c, not a Phase 4a gate.
-- [ ] Local profile save/list/dry-run/reviewed apply returns safe per-control
+- [x] Local profile save/list/dry-run/reviewed apply returns safe per-control
   result and never auto-applies.
 
 ## Update rule
