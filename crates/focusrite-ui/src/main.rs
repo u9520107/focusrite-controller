@@ -405,7 +405,7 @@ impl TouchscreenApp {
             dashboard,
         });
         self.connection = Connection::Connected;
-        if new_revision && let Some(message) = group_failure {
+        if let Some(message) = group_failure {
             self.toast = Some((message, Instant::now()));
         } else if new_revision && let Some(message) = mirror_failure {
             self.toast = Some((message, Instant::now()));
@@ -1567,6 +1567,47 @@ mod tests {
             Some("linked: optical.level failed (device_error)")
         );
         assert_eq!(app.state.as_ref().map(|state| state.revision), Some(3));
+    }
+
+    #[test]
+    fn group_failure_at_same_revision_becomes_toast() {
+        let (_sender, receiver) = mpsc::channel();
+        let mut app = TouchscreenApp::new(receiver, None, false);
+        let state = demo_state();
+        app.apply(Response {
+            version: 1,
+            kind: "snapshot".into(),
+            instance_id: Some("mock".into()),
+            revision: Some(1),
+            online: Some(true),
+            snapshot: Some(state.snapshot.clone()),
+            dashboard: Some(state.dashboard.clone()),
+            error: None,
+            group_result: None,
+            mirror_results: None,
+        });
+        app.apply(Response {
+            version: 1,
+            kind: "group_command_result".into(),
+            instance_id: Some("mock".into()),
+            revision: Some(1),
+            online: Some(true),
+            snapshot: Some(state.snapshot),
+            dashboard: Some(state.dashboard),
+            error: None,
+            group_result: Some(GroupCommandResult {
+                group: "linked".into(),
+                failed: Some(GroupFailure {
+                    control: ControlId("output.level".into()),
+                    error: "device_error".into(),
+                }),
+            }),
+            mirror_results: None,
+        });
+        assert_eq!(
+            app.toast.as_ref().map(|(message, _)| message.as_str()),
+            Some("linked: output.level failed (device_error)")
+        );
     }
 
     #[test]

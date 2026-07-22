@@ -343,6 +343,7 @@ impl<D: Device> Service<D> {
                 target: target.clone(),
                 applied: false,
                 skipped: true,
+                deferred: false,
                 failed: None,
             });
         }
@@ -352,6 +353,7 @@ impl<D: Device> Service<D> {
                 target: target.clone(),
                 applied: true,
                 skipped: false,
+                deferred: false,
                 failed: None,
             }),
             Err(error) => Ok(MirrorResult {
@@ -359,6 +361,7 @@ impl<D: Device> Service<D> {
                 target: target.clone(),
                 applied: false,
                 skipped: false,
+                deferred: false,
                 failed: Some(error),
             }),
         }

@@ -440,6 +440,7 @@ struct MirrorCommandResult {
     target: ControlId,
     applied: bool,
     skipped: bool,
+    deferred: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     failed: Option<GroupFailure>,
 }
@@ -487,6 +488,7 @@ fn mirror_results(state: &crate::worker::State) -> Option<Vec<MirrorCommandResul
                     target: target.clone(),
                     applied: result.applied,
                     skipped: result.skipped,
+                    deferred: result.deferred,
                     failed: result.failed.map(|error| GroupFailure {
                         control: target,
                         error: group_service_error(error),

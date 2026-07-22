@@ -19,6 +19,7 @@ const QUEUE_LIMIT: usize = 32;
 const EVENT_WAIT: Duration = Duration::from_millis(10);
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(3);
 const REQUEST_BATCH_LIMIT: usize = 4;
+const MIRROR_WRITE_LIMIT: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct State {
@@ -326,6 +327,7 @@ fn apply_mirrors<D: Device>(
     let mut changed = changed_controls(before, &service.snapshot().values);
     let mut mirrored_values = BTreeMap::new();
     let mut results = Vec::new();
+    let mut writes = 0;
     loop {
         let pending = dashboard
             .mirrors
@@ -342,6 +344,17 @@ fn apply_mirrors<D: Device>(
             return Ok(results);
         }
         for mirror in pending {
+            if writes == MIRROR_WRITE_LIMIT {
+                results.push(MirrorResult {
+                    source: mirror.source,
+                    target: mirror.target,
+                    applied: false,
+                    skipped: false,
+                    deferred: true,
+                    failed: None,
+                });
+                continue;
+            }
             if let Some(value) = service.snapshot().values.get(&mirror.source) {
                 mirrored_values.insert(mirror.source.clone(), value.clone());
             }
@@ -349,8 +362,31 @@ fn apply_mirrors<D: Device>(
             let result = service
                 .command_mirror(&mirror.source, &mirror.target)
                 .map_err(WorkerError::Group)?;
+            writes += usize::from(!result.skipped);
             changed.extend(changed_controls(&before_write, &service.snapshot().values));
             results.push(result);
+        }
+        if writes == MIRROR_WRITE_LIMIT {
+            results.extend(
+                dashboard
+                    .mirrors
+                    .iter()
+                    .filter(|mirror| {
+                        mirror.enabled
+                            && changed.contains(&mirror.source)
+                            && service.snapshot().values.get(&mirror.source)
+                                != mirrored_values.get(&mirror.source)
+                    })
+                    .map(|mirror| MirrorResult {
+                        source: mirror.source.clone(),
+                        target: mirror.target.clone(),
+                        applied: false,
+                        skipped: false,
+                        deferred: true,
+                        failed: None,
+                    }),
+            );
+            return Ok(results);
         }
     }
 }
@@ -455,6 +491,13 @@ mod tests {
         concurrent_source: ControlId,
     }
 
+    struct BusyMirrorDevice {
+        snapshot: DeviceSnapshot,
+        trigger: ControlId,
+        source: ControlId,
+        next: i32,
+    }
+
     impl Device for QueuedEventDevice {
         fn snapshot(&mut self) -> Result<DeviceSnapshot, DeviceError> {
             Ok(self.snapshot.clone())
@@ -530,6 +573,23 @@ mod tests {
                 self.snapshot
                     .values
                     .insert(self.concurrent_source.clone(), Value::Integer(60));
+            }
+            Ok(())
+        }
+    }
+
+    impl Device for BusyMirrorDevice {
+        fn snapshot(&mut self) -> Result<DeviceSnapshot, DeviceError> {
+            Ok(self.snapshot.clone())
+        }
+
+        fn write(&mut self, control: &ControlId, value: Value) -> Result<(), DeviceError> {
+            self.snapshot.values.insert(control.clone(), value);
+            if *control == self.trigger {
+                self.next += 1;
+                self.snapshot
+                    .values
+                    .insert(self.source.clone(), Value::Integer(self.next));
             }
             Ok(())
         }
@@ -813,6 +873,64 @@ mod tests {
         assert_eq!(state.snapshot.values[&source], Value::Integer(60));
         assert_eq!(state.snapshot.values[&target], Value::Integer(60));
         assert_eq!(state.mirror_results.len(), 2);
+        worker.stop().unwrap();
+    }
+
+    #[test]
+    fn mirror_pass_defers_continuous_source_changes() {
+        let source = ControlId("output.volume".into());
+        let target = ControlId("optical.volume".into());
+        let controls = vec![source.clone(), target.clone()];
+        let snapshot = DeviceSnapshot {
+            device_id: "mock-device".into(),
+            capability_schema: "mock-v1".into(),
+            capabilities: controls
+                .iter()
+                .cloned()
+                .map(|id| ControlCapability {
+                    id,
+                    domain: ValueDomain::Integer,
+                    writable: true,
+                    available: true,
+                    minimum: Some(0),
+                    maximum: Some(100),
+                    group: Some(GroupCapability {
+                        operation: GroupOperation::RelativeLevel,
+                    }),
+                    presentation: None,
+                })
+                .collect(),
+            values: controls
+                .into_iter()
+                .map(|control| (control, Value::Integer(25)))
+                .collect(),
+        };
+        let worker = DeviceWorker::start_with_dashboard(
+            BusyMirrorDevice {
+                snapshot,
+                trigger: target.clone(),
+                source: source.clone(),
+                next: 26,
+            },
+            Profiles::new(),
+            Some(DashboardConfig {
+                version: 3,
+                device_id: "mock-device".into(),
+                capability_schema: "mock-v1".into(),
+                controls: Vec::new(),
+                level_groups: Vec::new(),
+                mirrors: vec![DashboardMirror {
+                    source: source.clone(),
+                    target,
+                    enabled: true,
+                }],
+            }),
+        )
+        .unwrap();
+
+        let state = worker.command(source, Value::Integer(26)).unwrap();
+
+        assert!(state.mirror_results.iter().any(|result| result.deferred));
         worker.stop().unwrap();
     }
 
