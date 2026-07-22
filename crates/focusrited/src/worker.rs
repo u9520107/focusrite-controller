@@ -19,7 +19,6 @@ const QUEUE_LIMIT: usize = 32;
 const EVENT_WAIT: Duration = Duration::from_millis(10);
 const HEALTH_CHECK_INTERVAL: Duration = Duration::from_secs(3);
 const REQUEST_BATCH_LIMIT: usize = 4;
-const MIRROR_WRITE_LIMIT: usize = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct State {
@@ -206,6 +205,8 @@ fn run<D: Device>(
 ) {
     let mut last_health_check = Instant::now();
     let mut mirror_results = Vec::new();
+    let mut pending_mirror_sources = BTreeSet::new();
+    let mut expected_mirror_targets = BTreeMap::new();
     loop {
         let mut processed = 0;
         while processed < REQUEST_BATCH_LIMIT {
@@ -215,9 +216,32 @@ fn run<D: Device>(
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
             };
             processed += 1;
-            if !handle_request(&mut service, &dashboard, &mut mirror_results, request) {
+            if !handle_request(
+                &mut service,
+                &dashboard,
+                &mut mirror_results,
+                &mut pending_mirror_sources,
+                &mut expected_mirror_targets,
+                request,
+            ) {
                 return;
             }
+        }
+
+        if !pending_mirror_sources.is_empty() {
+            let before = service.snapshot().values.clone();
+            let forced = std::mem::take(&mut pending_mirror_sources);
+            let pass = apply_mirrors(
+                &mut service,
+                &dashboard,
+                &before,
+                &forced,
+                &mut expected_mirror_targets,
+            )
+            .unwrap_or_default();
+            mirror_results = pass.results;
+            pending_mirror_sources = pass.pending_sources;
+            continue;
         }
 
         if service.is_online() {
@@ -228,8 +252,16 @@ fn run<D: Device>(
             };
             let before = service.snapshot().values.clone();
             if service.wait_for_change(event_wait).unwrap_or(false) {
-                mirror_results =
-                    apply_mirrors(&mut service, &dashboard, &before).unwrap_or_default();
+                let pass = apply_mirrors(
+                    &mut service,
+                    &dashboard,
+                    &before,
+                    &BTreeSet::new(),
+                    &mut expected_mirror_targets,
+                )
+                .unwrap_or_default();
+                mirror_results = pass.results;
+                pending_mirror_sources = pass.pending_sources;
             }
         } else {
             thread::sleep(EVENT_WAIT);
@@ -237,8 +269,16 @@ fn run<D: Device>(
         if last_health_check.elapsed() >= HEALTH_CHECK_INTERVAL {
             let before = service.snapshot().values.clone();
             if service.refresh().is_ok() {
-                mirror_results =
-                    apply_mirrors(&mut service, &dashboard, &before).unwrap_or_default();
+                let pass = apply_mirrors(
+                    &mut service,
+                    &dashboard,
+                    &before,
+                    &BTreeSet::new(),
+                    &mut expected_mirror_targets,
+                )
+                .unwrap_or_default();
+                mirror_results = pass.results;
+                pending_mirror_sources = pass.pending_sources;
             }
             last_health_check = Instant::now();
         }
@@ -249,6 +289,8 @@ fn handle_request<D: Device>(
     service: &mut Service<D>,
     dashboard: &DashboardConfig,
     mirror_results: &mut Vec<MirrorResult>,
+    pending_mirror_sources: &mut BTreeSet<ControlId>,
+    expected_mirror_targets: &mut BTreeMap<ControlId, Value>,
     request: Request,
 ) -> bool {
     match request {
@@ -263,7 +305,16 @@ fn handle_request<D: Device>(
         Request::Refresh(reply) => {
             let before = service.snapshot().values.clone();
             let result = service.refresh().map(|_| {
-                *mirror_results = apply_mirrors(service, dashboard, &before).unwrap_or_default();
+                let pass = apply_mirrors(
+                    service,
+                    dashboard,
+                    &before,
+                    &BTreeSet::new(),
+                    expected_mirror_targets,
+                )
+                .unwrap_or_default();
+                *mirror_results = pass.results;
+                *pending_mirror_sources = pass.pending_sources;
                 state(service, dashboard, mirror_results)
             });
             let _ = reply.send(result);
@@ -275,7 +326,16 @@ fn handle_request<D: Device>(
         } => {
             let before = service.snapshot().values.clone();
             let result = service.command(&control, value).map(|_| {
-                *mirror_results = apply_mirrors(service, dashboard, &before).unwrap_or_default();
+                let pass = apply_mirrors(
+                    service,
+                    dashboard,
+                    &before,
+                    &BTreeSet::new(),
+                    expected_mirror_targets,
+                )
+                .unwrap_or_default();
+                *mirror_results = pass.results;
+                *pending_mirror_sources = pass.pending_sources;
                 state(service, dashboard, mirror_results)
             });
             let _ = reply.send(result);
@@ -302,8 +362,16 @@ fn handle_request<D: Device>(
                         })
                 })
                 .map(|result| {
-                    *mirror_results =
-                        apply_mirrors(service, dashboard, &before).unwrap_or_default();
+                    let pass = apply_mirrors(
+                        service,
+                        dashboard,
+                        &before,
+                        &BTreeSet::new(),
+                        expected_mirror_targets,
+                    )
+                    .unwrap_or_default();
+                    *mirror_results = pass.results;
+                    *pending_mirror_sources = pass.pending_sources;
                     (state(service, dashboard, mirror_results), result)
                 });
             let _ = reply.send(result);
@@ -316,79 +384,54 @@ fn handle_request<D: Device>(
     true
 }
 
+#[derive(Default)]
+struct MirrorPass {
+    results: Vec<MirrorResult>,
+    pending_sources: BTreeSet<ControlId>,
+}
+
 fn apply_mirrors<D: Device>(
     service: &mut Service<D>,
     dashboard: &DashboardConfig,
     before: &BTreeMap<ControlId, Value>,
-) -> Result<Vec<MirrorResult>, WorkerError> {
+    forced_sources: &BTreeSet<ControlId>,
+    expected_targets: &mut BTreeMap<ControlId, Value>,
+) -> Result<MirrorPass, WorkerError> {
     dashboard
         .validate_for(service.snapshot())
         .map_err(|error| WorkerError::Dashboard(error.to_string()))?;
-    let mut changed = changed_controls(before, &service.snapshot().values);
-    let mut mirrored_values = BTreeMap::new();
-    let mut results = Vec::new();
-    let mut writes = 0;
-    loop {
-        let pending = dashboard
-            .mirrors
-            .iter()
-            .filter(|mirror| {
-                mirror.enabled
-                    && changed.contains(&mirror.source)
-                    && service.snapshot().values.get(&mirror.source)
-                        != mirrored_values.get(&mirror.source)
-            })
-            .cloned()
-            .collect::<Vec<_>>();
-        if pending.is_empty() {
-            return Ok(results);
+    let mut sources = changed_controls(before, &service.snapshot().values);
+    sources.extend(forced_sources.iter().cloned());
+    sources.retain(|source| {
+        let current = service.snapshot().values.get(source);
+        !matches!(
+            expected_targets.remove(source),
+            Some(expected) if current == Some(&expected)
+        )
+    });
+    let mut pass = MirrorPass::default();
+    for mirror in dashboard
+        .mirrors
+        .iter()
+        .filter(|mirror| mirror.enabled && sources.contains(&mirror.source))
+    {
+        let before_write = service.snapshot().values.clone();
+        let result = service
+            .command_mirror(&mirror.source, &mirror.target)
+            .map_err(WorkerError::Group)?;
+        if result.applied
+            && let Some(value) = service.snapshot().values.get(&mirror.target)
+        {
+            expected_targets.insert(mirror.target.clone(), value.clone());
         }
-        for mirror in pending {
-            if writes == MIRROR_WRITE_LIMIT {
-                results.push(MirrorResult {
-                    source: mirror.source,
-                    target: mirror.target,
-                    applied: false,
-                    skipped: false,
-                    deferred: true,
-                    failed: None,
-                });
-                continue;
+        for source in changed_controls(&before_write, &service.snapshot().values) {
+            if expected_targets.get(&source) != service.snapshot().values.get(&source) {
+                pass.pending_sources.insert(source);
             }
-            if let Some(value) = service.snapshot().values.get(&mirror.source) {
-                mirrored_values.insert(mirror.source.clone(), value.clone());
-            }
-            let before_write = service.snapshot().values.clone();
-            let result = service
-                .command_mirror(&mirror.source, &mirror.target)
-                .map_err(WorkerError::Group)?;
-            writes += usize::from(!result.skipped);
-            changed.extend(changed_controls(&before_write, &service.snapshot().values));
-            results.push(result);
         }
-        if writes == MIRROR_WRITE_LIMIT {
-            results.extend(
-                dashboard
-                    .mirrors
-                    .iter()
-                    .filter(|mirror| {
-                        mirror.enabled
-                            && changed.contains(&mirror.source)
-                            && service.snapshot().values.get(&mirror.source)
-                                != mirrored_values.get(&mirror.source)
-                    })
-                    .map(|mirror| MirrorResult {
-                        source: mirror.source.clone(),
-                        target: mirror.target.clone(),
-                        applied: false,
-                        skipped: false,
-                        deferred: true,
-                        failed: None,
-                    }),
-            );
-            return Ok(results);
-        }
+        pass.results.push(result);
     }
+    Ok(pass)
 }
 
 fn changed_controls(
@@ -809,12 +852,18 @@ mod tests {
         )
         .unwrap();
 
-        let state = worker.command(first, Value::Integer(75)).unwrap();
-
-        assert_eq!(state.snapshot.values[&first_target], Value::Integer(75));
-        assert_eq!(state.snapshot.values[&second_target], Value::Integer(60));
-        assert_eq!(state.mirror_results.len(), 2);
+        worker.command(first, Value::Integer(75)).unwrap();
+        for _ in 0..10 {
+            let state = worker.state().unwrap();
+            if state.snapshot.values[&second_target] == Value::Integer(60) {
+                assert_eq!(state.snapshot.values[&first_target], Value::Integer(75));
+                worker.stop().unwrap();
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
         worker.stop().unwrap();
+        panic!("concurrent source did not resync");
     }
 
     #[test]
@@ -868,16 +917,22 @@ mod tests {
         )
         .unwrap();
 
-        let state = worker.command(source.clone(), Value::Integer(75)).unwrap();
-
-        assert_eq!(state.snapshot.values[&source], Value::Integer(60));
-        assert_eq!(state.snapshot.values[&target], Value::Integer(60));
-        assert_eq!(state.mirror_results.len(), 2);
+        worker.command(source.clone(), Value::Integer(75)).unwrap();
+        for _ in 0..10 {
+            let state = worker.state().unwrap();
+            if state.snapshot.values[&target] == Value::Integer(60) {
+                assert_eq!(state.snapshot.values[&source], Value::Integer(60));
+                worker.stop().unwrap();
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
         worker.stop().unwrap();
+        panic!("changed source did not resync");
     }
 
     #[test]
-    fn mirror_pass_defers_continuous_source_changes() {
+    fn mirror_pass_yields_during_continuous_source_changes() {
         let source = ControlId("output.volume".into());
         let target = ControlId("optical.volume".into());
         let controls = vec![source.clone(), target.clone()];
@@ -921,7 +976,7 @@ mod tests {
                 level_groups: Vec::new(),
                 mirrors: vec![DashboardMirror {
                     source: source.clone(),
-                    target,
+                    target: target.clone(),
                     enabled: true,
                 }],
             }),
@@ -930,7 +985,7 @@ mod tests {
 
         let state = worker.command(source, Value::Integer(26)).unwrap();
 
-        assert!(state.mirror_results.iter().any(|result| result.deferred));
+        assert_eq!(state.snapshot.values[&target], Value::Integer(26));
         worker.stop().unwrap();
     }
 

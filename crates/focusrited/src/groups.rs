@@ -36,7 +36,6 @@ pub struct MirrorResult {
     pub target: ControlId,
     pub applied: bool,
     pub skipped: bool,
-    pub deferred: bool,
     pub failed: Option<ServiceError>,
 }
 
