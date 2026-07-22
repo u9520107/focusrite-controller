@@ -242,14 +242,18 @@ fn handle_request<D: Device>(
 ) -> bool {
     match request {
         Request::State(reply) => {
-            let _ = reply.send(state(service, dashboard, mirror_results));
+            let state = state(service, dashboard, mirror_results);
+            mirror_results.clear();
+            let _ = reply.send(state);
         }
         Request::Refresh(reply) => {
             let before = service.snapshot().values.clone();
-            let _ = reply.send(service.refresh().map(|_| {
+            let result = service.refresh().map(|_| {
                 *mirror_results = apply_mirrors(service, dashboard, &before).unwrap_or_default();
                 state(service, dashboard, mirror_results)
-            }));
+            });
+            mirror_results.clear();
+            let _ = reply.send(result);
         }
         Request::Command {
             control,
@@ -257,10 +261,12 @@ fn handle_request<D: Device>(
             reply,
         } => {
             let before = service.snapshot().values.clone();
-            let _ = reply.send(service.command(&control, value).map(|_| {
+            let result = service.command(&control, value).map(|_| {
                 *mirror_results = apply_mirrors(service, dashboard, &before).unwrap_or_default();
                 state(service, dashboard, mirror_results)
-            }));
+            });
+            mirror_results.clear();
+            let _ = reply.send(result);
         }
         Request::LevelGroup {
             group,
@@ -288,6 +294,7 @@ fn handle_request<D: Device>(
                         apply_mirrors(service, dashboard, &before).unwrap_or_default();
                     (state(service, dashboard, mirror_results), result)
                 });
+            mirror_results.clear();
             let _ = reply.send(result);
         }
         Request::Stop(reply) => {
@@ -306,14 +313,7 @@ fn apply_mirrors<D: Device>(
     dashboard
         .validate_for(service.snapshot())
         .map_err(|error| WorkerError::Dashboard(error.to_string()))?;
-    let mut changed = service
-        .snapshot()
-        .values
-        .iter()
-        .filter_map(|(control, value)| {
-            (before.get(control) != Some(value)).then_some(control.clone())
-        })
-        .collect::<BTreeSet<_>>();
+    let mut changed = changed_controls(before, &service.snapshot().values);
     let mut mirrored_sources = BTreeSet::new();
     let mut results = Vec::new();
     loop {
@@ -331,15 +331,26 @@ fn apply_mirrors<D: Device>(
             return Ok(results);
         }
         for mirror in pending {
+            let before_write = service.snapshot().values.clone();
             let result = service
                 .command_mirror(&mirror.source, &mirror.target)
                 .map_err(WorkerError::Group)?;
-            if result.applied {
-                changed.insert(mirror.target.clone());
-            }
+            changed.extend(changed_controls(&before_write, &service.snapshot().values));
             results.push(result);
         }
     }
+}
+
+fn changed_controls(
+    before: &BTreeMap<ControlId, Value>,
+    after: &BTreeMap<ControlId, Value>,
+) -> BTreeSet<ControlId> {
+    after
+        .iter()
+        .filter_map(|(control, value)| {
+            (before.get(control) != Some(value)).then_some(control.clone())
+        })
+        .collect()
 }
 
 fn state<D: Device>(
@@ -424,6 +435,12 @@ mod tests {
         source: ControlId,
     }
 
+    struct ConcurrentMirrorDevice {
+        snapshot: DeviceSnapshot,
+        trigger: ControlId,
+        concurrent_source: ControlId,
+    }
+
     impl Device for QueuedEventDevice {
         fn snapshot(&mut self) -> Result<DeviceSnapshot, DeviceError> {
             Ok(self.snapshot.clone())
@@ -485,6 +502,22 @@ mod tests {
                 .values
                 .insert(self.source.clone(), Value::Integer(75));
             Ok(true)
+        }
+    }
+
+    impl Device for ConcurrentMirrorDevice {
+        fn snapshot(&mut self) -> Result<DeviceSnapshot, DeviceError> {
+            Ok(self.snapshot.clone())
+        }
+
+        fn write(&mut self, control: &ControlId, value: Value) -> Result<(), DeviceError> {
+            self.snapshot.values.insert(control.clone(), value);
+            if *control == self.trigger {
+                self.snapshot
+                    .values
+                    .insert(self.concurrent_source.clone(), Value::Integer(60));
+            }
+            Ok(())
         }
     }
 
@@ -632,6 +665,80 @@ mod tests {
         assert_eq!(state.snapshot.values[&target], Value::Integer(75));
         assert_eq!(state.mirror_results.len(), 1);
         assert!(state.mirror_results[0].applied);
+        assert!(worker.state().unwrap().mirror_results.is_empty());
+        worker.stop().unwrap();
+    }
+
+    #[test]
+    fn mirror_write_rechecks_concurrent_source_changes() {
+        let first = ControlId("output.volume".into());
+        let second = ControlId("headphone.volume".into());
+        let first_target = ControlId("optical.volume".into());
+        let second_target = ControlId("adat.volume".into());
+        let controls = vec![
+            first.clone(),
+            second.clone(),
+            first_target.clone(),
+            second_target.clone(),
+        ];
+        let snapshot = DeviceSnapshot {
+            device_id: "mock-device".into(),
+            capability_schema: "mock-v1".into(),
+            capabilities: controls
+                .iter()
+                .cloned()
+                .map(|id| ControlCapability {
+                    id,
+                    domain: ValueDomain::Integer,
+                    writable: true,
+                    available: true,
+                    minimum: Some(0),
+                    maximum: Some(100),
+                    group: Some(GroupCapability {
+                        operation: GroupOperation::RelativeLevel,
+                    }),
+                    presentation: None,
+                })
+                .collect(),
+            values: controls
+                .into_iter()
+                .map(|control| (control, Value::Integer(25)))
+                .collect(),
+        };
+        let worker = DeviceWorker::start_with_dashboard(
+            ConcurrentMirrorDevice {
+                snapshot,
+                trigger: first_target.clone(),
+                concurrent_source: second.clone(),
+            },
+            Profiles::new(),
+            Some(DashboardConfig {
+                version: 3,
+                device_id: "mock-device".into(),
+                capability_schema: "mock-v1".into(),
+                controls: Vec::new(),
+                level_groups: Vec::new(),
+                mirrors: vec![
+                    DashboardMirror {
+                        source: first.clone(),
+                        target: first_target.clone(),
+                        enabled: true,
+                    },
+                    DashboardMirror {
+                        source: second,
+                        target: second_target.clone(),
+                        enabled: true,
+                    },
+                ],
+            }),
+        )
+        .unwrap();
+
+        let state = worker.command(first, Value::Integer(75)).unwrap();
+
+        assert_eq!(state.snapshot.values[&first_target], Value::Integer(75));
+        assert_eq!(state.snapshot.values[&second_target], Value::Integer(60));
+        assert_eq!(state.mirror_results.len(), 2);
         worker.stop().unwrap();
     }
 

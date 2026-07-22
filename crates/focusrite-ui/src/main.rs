@@ -352,6 +352,10 @@ impl TouchscreenApp {
             })
         });
         let group_result = response.kind == "group_command_result";
+        let mirror_result = response
+            .mirror_results
+            .as_ref()
+            .is_some_and(|results| !results.is_empty());
         let mirror_failure = response.mirror_results.as_ref().and_then(|results| {
             results.iter().find_map(|result| {
                 result.failed.as_ref().map(|failure| {
@@ -379,7 +383,7 @@ impl TouchscreenApp {
         }
         let resync = self.state.as_ref().is_some_and(|state| {
             state.instance_id != instance_id
-                || (!group_result && revision > state.revision.saturating_add(1))
+                || (!(group_result || mirror_result) && revision > state.revision.saturating_add(1))
         });
         if resync {
             self.state = None;
@@ -1558,6 +1562,42 @@ mod tests {
             app.toast.as_ref().map(|(message, _)| message.as_str()),
             Some("linked: optical.level failed (device_error)")
         );
+        assert_eq!(app.state.as_ref().map(|state| state.revision), Some(3));
+    }
+
+    #[test]
+    fn mirror_result_allows_compound_revision() {
+        let (_sender, receiver) = mpsc::channel();
+        let mut app = TouchscreenApp::new(receiver, None, false);
+        let state = demo_state();
+        app.apply(Response {
+            version: 1,
+            kind: "snapshot".into(),
+            instance_id: Some("mock".into()),
+            revision: Some(1),
+            online: Some(true),
+            snapshot: Some(state.snapshot.clone()),
+            dashboard: Some(state.dashboard.clone()),
+            error: None,
+            group_result: None,
+            mirror_results: None,
+        });
+        app.apply(Response {
+            version: 1,
+            kind: "command_result".into(),
+            instance_id: Some("mock".into()),
+            revision: Some(3),
+            online: Some(true),
+            snapshot: Some(state.snapshot),
+            dashboard: Some(state.dashboard),
+            error: None,
+            group_result: None,
+            mirror_results: Some(vec![MirrorCommandResult {
+                source: ControlId("source".into()),
+                target: ControlId("target".into()),
+                failed: None,
+            }]),
+        });
         assert_eq!(app.state.as_ref().map(|state| state.revision), Some(3));
     }
 
