@@ -109,14 +109,14 @@ fn run(listener: UnixListener, worker: Arc<DeviceWorker>, running: Arc<AtomicBoo
     let mut last_revision = None;
     while running.load(Ordering::SeqCst) {
         accept_clients(&listener, &worker, &instance_id, &mut clients);
-        if let Ok(state) = worker.state()
+        if let Ok(state) = worker.event_state()
             && last_revision
                 .replace(state.revision)
                 .is_some_and(|revision| revision != state.revision)
         {
             broadcast(
                 &mut clients,
-                Outbound::Event(state_message(&instance_id, "event", state)),
+                Outbound::Event(event_message(&instance_id, state)),
             );
         }
         clients.retain_mut(|client| {
@@ -235,7 +235,7 @@ fn handle_request(
         },
         "command" => match (request.control, request.value) {
             (Some(control), Some(value)) => match worker.command(ControlId(control), value) {
-                Ok(state) => state_message(instance_id, "command_result", state),
+                Ok(state) => operation_state_message(instance_id, "command_result", state),
                 Err(error) => error_message(service_error(error)),
             },
             _ => error_message("invalid_command"),
@@ -455,26 +455,46 @@ fn state_message(instance_id: &str, kind: &'static str, state: crate::worker::St
         dashboard: Some(state.dashboard),
         error: None,
         group_result: None,
-        mirror_results: (!state.mirror_results.is_empty()).then(|| {
-            state
-                .mirror_results
-                .into_iter()
-                .map(|result| {
-                    let target = result.target;
-                    MirrorCommandResult {
-                        source: result.source,
-                        target: target.clone(),
-                        applied: result.applied,
-                        skipped: result.skipped,
-                        failed: result.failed.map(|error| GroupFailure {
-                            control: target,
-                            error: group_service_error(error),
-                        }),
-                    }
-                })
-                .collect()
-        }),
+        mirror_results: None,
     }
+}
+
+fn operation_state_message(
+    instance_id: &str,
+    kind: &'static str,
+    state: crate::worker::State,
+) -> Response {
+    let mirror_results = mirror_results(&state);
+    let mut response = state_message(instance_id, kind, state);
+    response.mirror_results = mirror_results;
+    response
+}
+
+fn event_message(instance_id: &str, state: crate::worker::State) -> Response {
+    operation_state_message(instance_id, "event", state)
+}
+
+fn mirror_results(state: &crate::worker::State) -> Option<Vec<MirrorCommandResult>> {
+    (!state.mirror_results.is_empty()).then(|| {
+        state
+            .mirror_results
+            .iter()
+            .cloned()
+            .map(|result| {
+                let target = result.target;
+                MirrorCommandResult {
+                    source: result.source,
+                    target: target.clone(),
+                    applied: result.applied,
+                    skipped: result.skipped,
+                    failed: result.failed.map(|error| GroupFailure {
+                        control: target,
+                        error: group_service_error(error),
+                    }),
+                }
+            })
+            .collect()
+    })
 }
 
 fn error_message(error: &'static str) -> Response {
@@ -498,7 +518,7 @@ fn group_state_message(
     group: String,
     result: GroupResult,
 ) -> Response {
-    let mut response = state_message(instance_id, "group_command_result", state);
+    let mut response = operation_state_message(instance_id, "group_command_result", state);
     response.group_result = Some(GroupCommandResult {
         group,
         applied: result.applied,

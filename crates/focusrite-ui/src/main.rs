@@ -381,6 +381,10 @@ impl TouchscreenApp {
         ) {
             return;
         }
+        let new_revision = self
+            .state
+            .as_ref()
+            .is_none_or(|state| state.instance_id != instance_id || state.revision != revision);
         let resync = self.state.as_ref().is_some_and(|state| {
             state.instance_id != instance_id
                 || (!(group_result || mirror_result) && revision > state.revision.saturating_add(1))
@@ -401,9 +405,9 @@ impl TouchscreenApp {
             dashboard,
         });
         self.connection = Connection::Connected;
-        if let Some(message) = group_failure {
+        if new_revision && let Some(message) = group_failure {
             self.toast = Some((message, Instant::now()));
-        } else if let Some(message) = mirror_failure {
+        } else if new_revision && let Some(message) = mirror_failure {
             self.toast = Some((message, Instant::now()));
         }
     }
