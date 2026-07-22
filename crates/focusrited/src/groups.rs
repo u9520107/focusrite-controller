@@ -29,6 +29,16 @@ pub struct GroupResult {
     pub failed: Option<(ControlId, ServiceError)>,
 }
 
+/// One confirmed source-to-target level mapping result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MirrorResult {
+    pub source: ControlId,
+    pub target: ControlId,
+    pub applied: bool,
+    pub skipped: bool,
+    pub failed: Option<ServiceError>,
+}
+
 /// Maps canonical 0..=1000 position into a declared integer range.
 pub fn map_level(position: u16, minimum: i32, maximum: i32) -> Result<i32, GroupError> {
     if position > 1000 {
@@ -64,31 +74,40 @@ impl LevelGroup {
             if !seen.insert(member) {
                 return Err(GroupError::DuplicateMember);
             }
-            let valid = capabilities.iter().any(|capability| {
-                capability.id == *member
-                    && capability.available
-                    && capability.writable
-                    && capability.domain == ValueDomain::Integer
-                    && capability
-                        .group
-                        .as_ref()
-                        .is_some_and(|group| group.operation == GroupOperation::RelativeLevel)
-                    && capability.minimum.is_some()
-                    && capability.maximum.is_some()
-                    && capability
-                        .minimum
-                        .zip(capability.maximum)
-                        .is_some_and(|(minimum, maximum)| minimum < maximum)
-            });
-            if !valid {
-                return Err(GroupError::IneligibleMember(member.clone()));
-            }
+            validate_relative_level(member, capabilities)?;
         }
         if !self.members.contains(&self.anchor) {
             return Err(GroupError::InvalidAnchor);
         }
         Ok(())
     }
+}
+
+/// Validates one adapter-declared level control for a normalized operation.
+pub fn validate_relative_level(
+    control: &ControlId,
+    capabilities: &[ControlCapability],
+) -> Result<(), GroupError> {
+    capabilities
+        .iter()
+        .any(|capability| {
+            capability.id == *control
+                && capability.available
+                && capability.writable
+                && capability.domain == ValueDomain::Integer
+                && capability
+                    .group
+                    .as_ref()
+                    .is_some_and(|group| group.operation == GroupOperation::RelativeLevel)
+                && capability.minimum.is_some()
+                && capability.maximum.is_some()
+                && capability
+                    .minimum
+                    .zip(capability.maximum)
+                    .is_some_and(|(minimum, maximum)| minimum < maximum)
+        })
+        .then_some(())
+        .ok_or_else(|| GroupError::IneligibleMember(control.clone()))
 }
 
 #[cfg(test)]

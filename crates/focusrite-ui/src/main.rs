@@ -131,6 +131,7 @@ struct Response {
     dashboard: Option<DashboardConfig>,
     error: Option<String>,
     group_result: Option<GroupCommandResult>,
+    mirror_results: Option<Vec<MirrorCommandResult>>,
 }
 
 #[derive(Deserialize)]
@@ -143,6 +144,13 @@ struct GroupCommandResult {
 struct GroupFailure {
     control: ControlId,
     error: String,
+}
+
+#[derive(Deserialize)]
+struct MirrorCommandResult {
+    source: ControlId,
+    target: ControlId,
+    failed: Option<GroupFailure>,
 }
 
 enum SocketEvent {
@@ -344,6 +352,16 @@ impl TouchscreenApp {
             })
         });
         let group_result = response.kind == "group_command_result";
+        let mirror_failure = response.mirror_results.as_ref().and_then(|results| {
+            results.iter().find_map(|result| {
+                result.failed.as_ref().map(|failure| {
+                    format!(
+                        "{} to {} failed ({})",
+                        result.source.0, result.target.0, failure.error
+                    )
+                })
+            })
+        });
         let (Some(instance_id), Some(revision), Some(online), Some(snapshot), Some(dashboard)) = (
             response.instance_id,
             response.revision,
@@ -380,6 +398,8 @@ impl TouchscreenApp {
         });
         self.connection = Connection::Connected;
         if let Some(message) = group_failure {
+            self.toast = Some((message, Instant::now()));
+        } else if let Some(message) = mirror_failure {
             self.toast = Some((message, Instant::now()));
         }
     }
@@ -1514,6 +1534,7 @@ mod tests {
             dashboard: Some(state.dashboard.clone()),
             error: None,
             group_result: None,
+            mirror_results: None,
         });
         app.apply(Response {
             version: 1,
@@ -1531,6 +1552,7 @@ mod tests {
                     error: "device_error".into(),
                 }),
             }),
+            mirror_results: None,
         });
         assert_eq!(
             app.toast.as_ref().map(|(message, _)| message.as_str()),

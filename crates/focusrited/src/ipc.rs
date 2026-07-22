@@ -415,6 +415,8 @@ struct Response {
     error: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     group_result: Option<GroupCommandResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mirror_results: Option<Vec<MirrorCommandResult>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -432,6 +434,16 @@ struct GroupFailure {
     error: &'static str,
 }
 
+#[derive(Clone, Serialize)]
+struct MirrorCommandResult {
+    source: ControlId,
+    target: ControlId,
+    applied: bool,
+    skipped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failed: Option<GroupFailure>,
+}
+
 fn state_message(instance_id: &str, kind: &'static str, state: crate::worker::State) -> Response {
     Response {
         v: PROTOCOL_VERSION,
@@ -443,6 +455,25 @@ fn state_message(instance_id: &str, kind: &'static str, state: crate::worker::St
         dashboard: Some(state.dashboard),
         error: None,
         group_result: None,
+        mirror_results: (!state.mirror_results.is_empty()).then(|| {
+            state
+                .mirror_results
+                .into_iter()
+                .map(|result| {
+                    let target = result.target;
+                    MirrorCommandResult {
+                        source: result.source,
+                        target: target.clone(),
+                        applied: result.applied,
+                        skipped: result.skipped,
+                        failed: result.failed.map(|error| GroupFailure {
+                            control: target,
+                            error: group_service_error(error),
+                        }),
+                    }
+                })
+                .collect()
+        }),
     }
 }
 
@@ -457,6 +488,7 @@ fn error_message(error: &'static str) -> Response {
         dashboard: None,
         error: Some(error),
         group_result: None,
+        mirror_results: None,
     }
 }
 
@@ -698,6 +730,7 @@ mod tests {
                         members: vec![first.clone(), second],
                         anchor: first,
                     }],
+                    mirrors: Vec::new(),
                 }),
             )
             .unwrap(),
@@ -868,6 +901,7 @@ mod tests {
                 dashboard: None,
                 error: None,
                 group_result: None,
+                mirror_results: None,
             })
         };
         assert!(client.queue(event(1)));
@@ -891,6 +925,7 @@ mod tests {
                 dashboard: None,
                 error: None,
                 group_result: None,
+                mirror_results: None,
             })
         };
         while client.queue(large_reply()) {}
@@ -991,6 +1026,7 @@ mod tests {
             dashboard: None,
             error: None,
             group_result: None,
+            mirror_results: None,
         })));
         assert!(client.reject("malformed_message"));
         assert!(client.has_pending_output());

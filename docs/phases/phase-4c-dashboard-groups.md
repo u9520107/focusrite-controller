@@ -6,8 +6,11 @@ In progress. MR 1 delivers versioned, device-bound dashboard metadata and
 read-only CLI import/export. MR 2a/2b deliver persisted mock-only relative
 groups through service, worker, local IPC, and touchscreen. Remaining MR 2
 slices add adaptive adapter declarations, native/device-specific operations,
-mirrors, and synchronized sets. This phase does not add meters, LAN serving,
-browser UI, or unapproved hardware routing changes.
+and synchronized sets. MR 2e persists validated disabled-by-default mirrors;
+confirmed source commands and source events map through serial worker, confirm
+their targets, and return per-target applied/skipped/failed results. This phase
+does not add meters, LAN serving, browser UI, or unapproved hardware routing
+changes.
 
 ## Goal
 
@@ -233,12 +236,17 @@ configuration through validated CLI import/export before Phase 5 web editing.
 
 ### MR 2e: One-way mirror bindings
 
-**Plan**
+**Complete — mock-only runtime semantics**
 
-1. Persist validated source/target mapping with explicit disabled-by-default
-   state and adapter-declared operation compatibility.
-2. Reject cycles; route writes through serial worker; confirm target state.
-3. Report target partial failure without rolling back confirmed source state.
+- Dashboard schema v3 persists source, target, and disabled-by-default state.
+  It accepts only adapter-declared relative-level controls, rejects self maps,
+  repeated sources, and all cycles.
+- Confirmed source commands and external source events flow through serial
+  worker. Each target mapping uses normalized integer bounds, confirms state,
+  and returns applied/skipped/failed result without rolling back source.
+- Target writes refresh authoritative state before later event reconciliation,
+  so expected target echoes do not re-trigger a mapping. Touchscreen shows a
+  target-failure toast.
 
 **Verification**
 

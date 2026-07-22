@@ -1,7 +1,7 @@
 //! Versioned, per-device dashboard metadata. Never contains device state.
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File},
     io::{self, Write},
     path::PathBuf,
@@ -9,9 +9,12 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ControlId, DeviceSnapshot, PresentationKind, groups::LevelGroup};
+use crate::{
+    ControlId, DeviceSnapshot, PresentationKind,
+    groups::{LevelGroup, validate_relative_level},
+};
 
-pub const DASHBOARD_CONFIG_VERSION: u8 = 2;
+pub const DASHBOARD_CONFIG_VERSION: u8 = 3;
 pub const DASHBOARD_LIMIT: usize = 12;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -22,6 +25,8 @@ pub struct DashboardConfig {
     pub controls: Vec<DashboardControl>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub level_groups: Vec<DashboardLevelGroup>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mirrors: Vec<DashboardMirror>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -38,6 +43,15 @@ pub struct DashboardLevelGroup {
     pub label: String,
     pub members: Vec<ControlId>,
     pub anchor: ControlId,
+}
+
+/// Persisted one-way level mapping. Runtime propagation remains explicit.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct DashboardMirror {
+    pub source: ControlId,
+    pub target: ControlId,
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 impl DashboardLevelGroup {
@@ -75,15 +89,19 @@ impl DashboardConfig {
                 .map(|(_, id)| DashboardControl { id, label: None })
                 .collect(),
             level_groups: Vec::new(),
+            mirrors: Vec::new(),
         }
     }
 
     pub fn validate_for(&self, snapshot: &DeviceSnapshot) -> io::Result<()> {
-        if self.version != 1 && self.version != DASHBOARD_CONFIG_VERSION {
+        if !(1..=DASHBOARD_CONFIG_VERSION).contains(&self.version) {
             return invalid("unknown dashboard config version");
         }
         if self.version == 1 && !self.level_groups.is_empty() {
             return invalid("dashboard groups require config version 2");
+        }
+        if self.version < 3 && !self.mirrors.is_empty() {
+            return invalid("dashboard mirrors require config version 3");
         }
         if self.device_id != snapshot.device_id
             || self.capability_schema != snapshot.capability_schema
@@ -126,8 +144,41 @@ impl DashboardConfig {
                 .validate(&snapshot.capabilities)
                 .map_err(|error| invalid_error(format!("dashboard group is invalid: {error:?}")))?;
         }
+        validate_mirrors(&self.mirrors, snapshot)?;
         Ok(())
     }
+}
+
+fn validate_mirrors(mirrors: &[DashboardMirror], snapshot: &DeviceSnapshot) -> io::Result<()> {
+    let mut targets = BTreeMap::new();
+    for mirror in mirrors {
+        if mirror.source == mirror.target {
+            return invalid("dashboard mirror maps a control to itself");
+        }
+        if targets
+            .insert(mirror.source.clone(), mirror.target.clone())
+            .is_some()
+        {
+            return invalid("dashboard repeats mirror source");
+        }
+        validate_relative_level(&mirror.source, &snapshot.capabilities).map_err(|error| {
+            invalid_error(format!("dashboard mirror source is invalid: {error:?}"))
+        })?;
+        validate_relative_level(&mirror.target, &snapshot.capabilities).map_err(|error| {
+            invalid_error(format!("dashboard mirror target is invalid: {error:?}"))
+        })?;
+    }
+    for source in targets.keys() {
+        let mut seen = BTreeSet::new();
+        let mut current = source;
+        while let Some(next) = targets.get(current) {
+            if !seen.insert(current) {
+                return invalid("dashboard mirror cycle");
+            }
+            current = next;
+        }
+    }
+    Ok(())
 }
 
 pub struct DashboardStore {
@@ -254,6 +305,7 @@ mod tests {
                 members: vec![ControlId("shown".into()), ControlId("other".into())],
                 anchor: ControlId("shown".into()),
             }],
+            mirrors: Vec::new(),
         };
         let mut snapshot = snapshot;
         snapshot.capabilities.push(ControlCapability {
@@ -323,6 +375,42 @@ mod tests {
         )
         .unwrap();
         assert!(config.level_groups.is_empty());
+        assert!(config.mirrors.is_empty());
         config.validate_for(&snapshot()).unwrap();
+    }
+
+    #[test]
+    fn mirrors_require_eligible_non_cyclic_controls() {
+        let mut snapshot = snapshot();
+        let other = ControlId("other".into());
+        snapshot.capabilities.push(ControlCapability {
+            id: other.clone(),
+            domain: ValueDomain::Integer,
+            writable: true,
+            available: true,
+            minimum: Some(0),
+            maximum: Some(100),
+            group: Some(crate::GroupCapability {
+                operation: crate::GroupOperation::RelativeLevel,
+            }),
+            presentation: None,
+        });
+        let shown = ControlId("shown".into());
+        let mut config = DashboardConfig::defaults(&snapshot);
+        config.mirrors = vec![DashboardMirror {
+            source: shown.clone(),
+            target: other.clone(),
+            enabled: false,
+        }];
+        config.validate_for(&snapshot).unwrap();
+        config.mirrors.push(DashboardMirror {
+            source: other,
+            target: shown,
+            enabled: false,
+        });
+        assert_eq!(
+            config.validate_for(&snapshot).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
     }
 }

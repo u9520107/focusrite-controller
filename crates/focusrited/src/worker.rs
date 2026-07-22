@@ -1,6 +1,7 @@
 //! Single-worker boundary for all blocking device operations.
 
 use std::{
+    collections::{BTreeMap, BTreeSet},
     sync::{
         Mutex,
         mpsc::{Receiver, SyncSender, sync_channel},
@@ -10,8 +11,8 @@ use std::{
 };
 
 use crate::{
-    ControlId, Device, DeviceSnapshot, GroupError, GroupResult, Service, ServiceError, Value,
-    dashboard_store::DashboardConfig, profile_store::Profiles,
+    ControlId, Device, DeviceSnapshot, GroupError, GroupResult, MirrorResult, Service,
+    ServiceError, Value, dashboard_store::DashboardConfig, profile_store::Profiles,
 };
 
 const QUEUE_LIMIT: usize = 32;
@@ -25,6 +26,7 @@ pub struct State {
     pub snapshot: DeviceSnapshot,
     pub revision: u64,
     pub online: bool,
+    pub mirror_results: Vec<MirrorResult>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -192,6 +194,7 @@ fn run<D: Device>(
     dashboard: DashboardConfig,
 ) {
     let mut last_health_check = Instant::now();
+    let mut mirror_results = Vec::new();
     loop {
         let mut processed = 0;
         while processed < REQUEST_BATCH_LIMIT {
@@ -201,7 +204,7 @@ fn run<D: Device>(
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
             };
             processed += 1;
-            if !handle_request(&mut service, &dashboard, request) {
+            if !handle_request(&mut service, &dashboard, &mut mirror_results, request) {
                 return;
             }
         }
@@ -212,12 +215,20 @@ fn run<D: Device>(
             } else {
                 EVENT_WAIT
             };
-            let _ = service.wait_for_change(event_wait);
+            let before = service.snapshot().values.clone();
+            if service.wait_for_change(event_wait).unwrap_or(false) {
+                mirror_results =
+                    apply_mirrors(&mut service, &dashboard, &before).unwrap_or_default();
+            }
         } else {
             thread::sleep(EVENT_WAIT);
         }
         if last_health_check.elapsed() >= HEALTH_CHECK_INTERVAL {
-            let _ = service.refresh();
+            let before = service.snapshot().values.clone();
+            if service.refresh().is_ok() {
+                mirror_results =
+                    apply_mirrors(&mut service, &dashboard, &before).unwrap_or_default();
+            }
             last_health_check = Instant::now();
         }
     }
@@ -226,31 +237,37 @@ fn run<D: Device>(
 fn handle_request<D: Device>(
     service: &mut Service<D>,
     dashboard: &DashboardConfig,
+    mirror_results: &mut Vec<MirrorResult>,
     request: Request,
 ) -> bool {
     match request {
         Request::State(reply) => {
-            let _ = reply.send(state(service, dashboard));
+            let _ = reply.send(state(service, dashboard, mirror_results));
         }
         Request::Refresh(reply) => {
-            let _ = reply.send(service.refresh().map(|_| state(service, dashboard)));
+            let before = service.snapshot().values.clone();
+            let _ = reply.send(service.refresh().map(|_| {
+                *mirror_results = apply_mirrors(service, dashboard, &before).unwrap_or_default();
+                state(service, dashboard, mirror_results)
+            }));
         }
         Request::Command {
             control,
             value,
             reply,
         } => {
-            let _ = reply.send(
-                service
-                    .command(&control, value)
-                    .map(|_| state(service, dashboard)),
-            );
+            let before = service.snapshot().values.clone();
+            let _ = reply.send(service.command(&control, value).map(|_| {
+                *mirror_results = apply_mirrors(service, dashboard, &before).unwrap_or_default();
+                state(service, dashboard, mirror_results)
+            }));
         }
         Request::LevelGroup {
             group,
             position,
             reply,
         } => {
+            let before = service.snapshot().values.clone();
             let result = dashboard
                 .validate_for(service.snapshot())
                 .map_err(|error| WorkerError::Dashboard(error.to_string()))
@@ -266,7 +283,11 @@ fn handle_request<D: Device>(
                                 .map_err(WorkerError::Group)
                         })
                 })
-                .map(|result| (state(service, dashboard), result));
+                .map(|result| {
+                    *mirror_results =
+                        apply_mirrors(service, dashboard, &before).unwrap_or_default();
+                    (state(service, dashboard, mirror_results), result)
+                });
             let _ = reply.send(result);
         }
         Request::Stop(reply) => {
@@ -277,12 +298,61 @@ fn handle_request<D: Device>(
     true
 }
 
-fn state<D: Device>(service: &Service<D>, dashboard: &DashboardConfig) -> State {
+fn apply_mirrors<D: Device>(
+    service: &mut Service<D>,
+    dashboard: &DashboardConfig,
+    before: &BTreeMap<ControlId, Value>,
+) -> Result<Vec<MirrorResult>, WorkerError> {
+    dashboard
+        .validate_for(service.snapshot())
+        .map_err(|error| WorkerError::Dashboard(error.to_string()))?;
+    let mut changed = service
+        .snapshot()
+        .values
+        .iter()
+        .filter_map(|(control, value)| {
+            (before.get(control) != Some(value)).then_some(control.clone())
+        })
+        .collect::<BTreeSet<_>>();
+    let mut mirrored_sources = BTreeSet::new();
+    let mut results = Vec::new();
+    loop {
+        let pending = dashboard
+            .mirrors
+            .iter()
+            .filter(|mirror| {
+                mirror.enabled
+                    && changed.contains(&mirror.source)
+                    && mirrored_sources.insert(mirror.source.clone())
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if pending.is_empty() {
+            return Ok(results);
+        }
+        for mirror in pending {
+            let result = service
+                .command_mirror(&mirror.source, &mirror.target)
+                .map_err(WorkerError::Group)?;
+            if result.applied {
+                changed.insert(mirror.target.clone());
+            }
+            results.push(result);
+        }
+    }
+}
+
+fn state<D: Device>(
+    service: &Service<D>,
+    dashboard: &DashboardConfig,
+    mirror_results: &[MirrorResult],
+) -> State {
     State {
         dashboard: dashboard.clone(),
         snapshot: service.snapshot().clone(),
         revision: service.revision(),
         online: service.is_online(),
+        mirror_results: mirror_results.to_vec(),
     }
 }
 
@@ -299,7 +369,8 @@ mod tests {
     use super::*;
     use crate::{
         ControlCapability, DeviceError, GroupCapability, GroupOperation, ValueDomain,
-        dashboard_store::DashboardLevelGroup, profile_store::Profiles,
+        dashboard_store::{DashboardLevelGroup, DashboardMirror},
+        profile_store::Profiles,
     };
 
     struct MockDevice(DeviceSnapshot);
@@ -347,6 +418,12 @@ mod tests {
         event_ready: Arc<AtomicBool>,
     }
 
+    struct MirrorEventDevice {
+        snapshot: DeviceSnapshot,
+        changed: bool,
+        source: ControlId,
+    }
+
     impl Device for QueuedEventDevice {
         fn snapshot(&mut self) -> Result<DeviceSnapshot, DeviceError> {
             Ok(self.snapshot.clone())
@@ -385,6 +462,28 @@ mod tests {
             self.snapshot
                 .values
                 .insert(ControlId("direct-monitor".into()), Value::Bool(true));
+            Ok(true)
+        }
+    }
+
+    impl Device for MirrorEventDevice {
+        fn snapshot(&mut self) -> Result<DeviceSnapshot, DeviceError> {
+            Ok(self.snapshot.clone())
+        }
+
+        fn write(&mut self, control: &ControlId, value: Value) -> Result<(), DeviceError> {
+            self.snapshot.values.insert(control.clone(), value);
+            Ok(())
+        }
+
+        fn wait_for_change(&mut self, _: Duration) -> Result<bool, DeviceError> {
+            if self.changed {
+                return Ok(false);
+            }
+            self.changed = true;
+            self.snapshot
+                .values
+                .insert(self.source.clone(), Value::Integer(75));
             Ok(true)
         }
     }
@@ -465,6 +564,7 @@ mod tests {
                 members: vec![first.clone(), second.clone()],
                 anchor: first.clone(),
             }],
+            mirrors: Vec::new(),
         };
         let worker = DeviceWorker::start_with_dashboard(
             MockDevice(snapshot),
@@ -479,6 +579,122 @@ mod tests {
         assert_eq!(state.snapshot.values[&first], Value::Integer(75));
         assert_eq!(state.snapshot.values[&second], Value::Integer(50));
         worker.stop().unwrap();
+    }
+
+    #[test]
+    fn serial_worker_mirrors_confirmed_source_command() {
+        let source = ControlId("output.volume".into());
+        let target = ControlId("optical.volume".into());
+        let snapshot = DeviceSnapshot {
+            device_id: "mock-device".into(),
+            capability_schema: "mock-v1".into(),
+            capabilities: vec![source.clone(), target.clone()]
+                .into_iter()
+                .map(|id| ControlCapability {
+                    id,
+                    domain: ValueDomain::Integer,
+                    writable: true,
+                    available: true,
+                    minimum: Some(0),
+                    maximum: Some(100),
+                    group: Some(GroupCapability {
+                        operation: GroupOperation::RelativeLevel,
+                    }),
+                    presentation: None,
+                })
+                .collect(),
+            values: BTreeMap::from([
+                (source.clone(), Value::Integer(50)),
+                (target.clone(), Value::Integer(25)),
+            ]),
+        };
+        let worker = DeviceWorker::start_with_dashboard(
+            MockDevice(snapshot),
+            Profiles::new(),
+            Some(DashboardConfig {
+                version: 3,
+                device_id: "mock-device".into(),
+                capability_schema: "mock-v1".into(),
+                controls: Vec::new(),
+                level_groups: Vec::new(),
+                mirrors: vec![DashboardMirror {
+                    source: source.clone(),
+                    target: target.clone(),
+                    enabled: true,
+                }],
+            }),
+        )
+        .unwrap();
+
+        let state = worker.command(source.clone(), Value::Integer(75)).unwrap();
+
+        assert_eq!(state.snapshot.values[&source], Value::Integer(75));
+        assert_eq!(state.snapshot.values[&target], Value::Integer(75));
+        assert_eq!(state.mirror_results.len(), 1);
+        assert!(state.mirror_results[0].applied);
+        worker.stop().unwrap();
+    }
+
+    #[test]
+    fn serial_worker_mirrors_confirmed_source_event() {
+        let source = ControlId("output.volume".into());
+        let target = ControlId("optical.volume".into());
+        let snapshot = DeviceSnapshot {
+            device_id: "mock-device".into(),
+            capability_schema: "mock-v1".into(),
+            capabilities: vec![source.clone(), target.clone()]
+                .into_iter()
+                .map(|id| ControlCapability {
+                    id,
+                    domain: ValueDomain::Integer,
+                    writable: true,
+                    available: true,
+                    minimum: Some(0),
+                    maximum: Some(100),
+                    group: Some(GroupCapability {
+                        operation: GroupOperation::RelativeLevel,
+                    }),
+                    presentation: None,
+                })
+                .collect(),
+            values: BTreeMap::from([
+                (source.clone(), Value::Integer(50)),
+                (target.clone(), Value::Integer(25)),
+            ]),
+        };
+        let worker = DeviceWorker::start_with_dashboard(
+            MirrorEventDevice {
+                snapshot,
+                changed: false,
+                source: source.clone(),
+            },
+            Profiles::new(),
+            Some(DashboardConfig {
+                version: 3,
+                device_id: "mock-device".into(),
+                capability_schema: "mock-v1".into(),
+                controls: Vec::new(),
+                level_groups: Vec::new(),
+                mirrors: vec![DashboardMirror {
+                    source,
+                    target: target.clone(),
+                    enabled: true,
+                }],
+            }),
+        )
+        .unwrap();
+
+        for _ in 0..10 {
+            let state = worker.state().unwrap();
+            if state.snapshot.values[&target] == Value::Integer(75) {
+                assert_eq!(state.mirror_results.len(), 1);
+                worker.stop().unwrap();
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        worker.stop().unwrap();
+        panic!("event did not mirror");
     }
 
     #[test]
@@ -530,6 +746,7 @@ mod tests {
                 members: vec![first, second],
                 anchor: ControlId("output.volume".into()),
             }],
+            mirrors: Vec::new(),
         };
         let writes = Arc::new(Mutex::new(Vec::new()));
         let worker = DeviceWorker::start_with_dashboard(
