@@ -20,8 +20,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    ControlId, DeviceSnapshot, ServiceError, Value, dashboard_store::DashboardConfig,
-    groups::GroupResult, worker::DeviceWorker,
+    ControlId, DeviceSnapshot, ProfileApplyResult, ProfilePreview, ProfileReview, ServiceError,
+    Value, dashboard_store::DashboardConfig, groups::GroupResult, worker::DeviceWorker,
 };
 
 const PROTOCOL_VERSION: u8 = 1;
@@ -249,6 +249,42 @@ fn handle_request(
             }
             _ => error_message("invalid_group_command"),
         },
+        "profile_save" => match request.name {
+            Some(name) => match worker.save_profile(name) {
+                Ok(profiles) => {
+                    profile_message("profile_save_result", ProfileResult::Saved { profiles })
+                }
+                Err(error) => error_message(service_error(error)),
+            },
+            None => error_message("invalid_profile_save"),
+        },
+        "profile_list" => match worker.profiles() {
+            Ok(profiles) => {
+                profile_message("profile_list_result", ProfileResult::Listed { profiles })
+            }
+            Err(error) => error_message(service_error(error)),
+        },
+        "profile_review" => match request.name {
+            Some(name) => match worker.review_profile(name) {
+                Ok(preview) => {
+                    profile_message("profile_review_result", ProfileResult::Reviewed { preview })
+                }
+                Err(error) => error_message(service_error(error)),
+            },
+            None => error_message("invalid_profile_review"),
+        },
+        "profile_apply" => match (request.name, request.review) {
+            (Some(name), Some(review)) => match worker.apply_profile(name, review) {
+                Ok((state, result)) => profile_state_message(
+                    instance_id,
+                    "profile_apply_result",
+                    state,
+                    ProfileResult::Applied { result },
+                ),
+                Err(error) => error_message(service_error(error)),
+            },
+            _ => error_message("invalid_profile_apply"),
+        },
         _ => error_message("unknown_message_type"),
     };
     if client.queue(Outbound::Reply(message)) {
@@ -394,6 +430,8 @@ struct Request {
     value: Option<Value>,
     group: Option<String>,
     position: Option<u16>,
+    name: Option<String>,
+    review: Option<ProfileReview>,
 }
 
 #[derive(Clone, Serialize)]
@@ -415,6 +453,17 @@ struct Response {
     error: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     group_result: Option<GroupCommandResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    profile_result: Option<ProfileResult>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+enum ProfileResult {
+    Saved { profiles: Vec<String> },
+    Listed { profiles: Vec<String> },
+    Reviewed { preview: ProfilePreview },
+    Applied { result: ProfileApplyResult },
 }
 
 #[derive(Clone, Serialize)]
@@ -443,6 +492,7 @@ fn state_message(instance_id: &str, kind: &'static str, state: crate::worker::St
         dashboard: Some(state.dashboard),
         error: None,
         group_result: None,
+        profile_result: None,
     }
 }
 
@@ -457,7 +507,34 @@ fn error_message(error: &'static str) -> Response {
         dashboard: None,
         error: Some(error),
         group_result: None,
+        profile_result: None,
     }
+}
+
+fn profile_message(kind: &'static str, profile_result: ProfileResult) -> Response {
+    Response {
+        v: PROTOCOL_VERSION,
+        kind,
+        instance_id: None,
+        revision: None,
+        online: None,
+        snapshot: None,
+        dashboard: None,
+        error: None,
+        group_result: None,
+        profile_result: Some(profile_result),
+    }
+}
+
+fn profile_state_message(
+    instance_id: &str,
+    kind: &'static str,
+    state: crate::worker::State,
+    profile_result: ProfileResult,
+) -> Response {
+    let mut response = state_message(instance_id, kind, state);
+    response.profile_result = Some(profile_result);
+    response
 }
 
 fn group_state_message(
@@ -486,10 +563,11 @@ fn group_service_error(error: ServiceError) -> &'static str {
         ServiceError::Unavailable => "unavailable",
         ServiceError::ReadOnly => "read_only",
         ServiceError::InvalidValue => "invalid_value",
+        ServiceError::InvalidProfileName => "invalid_profile_name",
         ServiceError::UnconfirmedWrite => "unconfirmed_write",
-        ServiceError::UnknownProfile | ServiceError::ProfileBindingMismatch => {
-            "unsupported_command"
-        }
+        ServiceError::UnknownProfile => "unknown_profile",
+        ServiceError::ProfileBindingMismatch => "profile_binding_mismatch",
+        ServiceError::ProfileReviewMismatch => "profile_review_mismatch",
     }
 }
 
@@ -498,6 +576,7 @@ fn service_error(error: crate::worker::WorkerError) -> &'static str {
         crate::worker::WorkerError::Dashboard(_) => "dashboard_invalid",
         crate::worker::WorkerError::Group(_) => "invalid_group_command",
         crate::worker::WorkerError::UnknownGroup => "unknown_group",
+        crate::worker::WorkerError::ProfileStore(_) => "profile_store_error",
         crate::worker::WorkerError::Stopped => "worker_stopped",
         crate::worker::WorkerError::Service(ServiceError::Device(_)) => "device_error",
         crate::worker::WorkerError::Service(ServiceError::UnknownControl) => "unknown_control",
@@ -505,7 +584,16 @@ fn service_error(error: crate::worker::WorkerError) -> &'static str {
         crate::worker::WorkerError::Service(ServiceError::ReadOnly) => "read_only",
         crate::worker::WorkerError::Service(ServiceError::InvalidValue) => "invalid_value",
         crate::worker::WorkerError::Service(ServiceError::UnconfirmedWrite) => "unconfirmed_write",
-        crate::worker::WorkerError::Service(_) => "unsupported_command",
+        crate::worker::WorkerError::Service(ServiceError::InvalidProfileName) => {
+            "invalid_profile_name"
+        }
+        crate::worker::WorkerError::Service(ServiceError::UnknownProfile) => "unknown_profile",
+        crate::worker::WorkerError::Service(ServiceError::ProfileBindingMismatch) => {
+            "profile_binding_mismatch"
+        }
+        crate::worker::WorkerError::Service(ServiceError::ProfileReviewMismatch) => {
+            "profile_review_mismatch"
+        }
     }
 }
 
@@ -764,6 +852,74 @@ mod tests {
     }
 
     #[test]
+    fn profile_requests_require_current_review_and_return_confirmed_state() {
+        let (server, worker, path) = server();
+        let mut stream = UnixStream::connect(&path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let _ = read_type(&mut reader, "snapshot");
+
+        stream
+            .write_all(b"{\"v\":1,\"type\":\"profile_save\",\"name\":\"desk\"}\n")
+            .unwrap();
+        assert_eq!(
+            read_type(&mut reader, "profile_save_result")["profile_result"]["profiles"],
+            serde_json::json!(["desk"])
+        );
+        stream
+            .write_all(
+                b"{\"v\":1,\"type\":\"command\",\"control\":\"output.level\",\"value\":{\"type\":\"integer\",\"value\":75}}\n",
+            )
+            .unwrap();
+        let _ = read_type(&mut reader, "command_result");
+        stream
+            .write_all(b"{\"v\":1,\"type\":\"profile_review\",\"name\":\"desk\"}\n")
+            .unwrap();
+        let preview = read_type(&mut reader, "profile_review_result");
+        let review = preview["profile_result"]["preview"]["review"].clone();
+        assert_eq!(preview["profile_result"]["preview"]["binding"], "match");
+
+        serde_json::to_writer(
+            &mut stream,
+            &serde_json::json!({
+                "v": 1,
+                "type": "profile_apply",
+                "name": "desk",
+                "review": review,
+            }),
+        )
+        .unwrap();
+        stream.write_all(b"\n").unwrap();
+        let applied = read_type(&mut reader, "profile_apply_result");
+        assert_eq!(applied["snapshot"]["values"]["output.level"]["value"], 50);
+        assert_eq!(
+            applied["profile_result"]["result"]["entries"][0]["status"],
+            "applied"
+        );
+
+        serde_json::to_writer(
+            &mut stream,
+            &serde_json::json!({
+                "v": 1,
+                "type": "profile_apply",
+                "name": "desk",
+                "review": preview["profile_result"]["preview"]["review"],
+            }),
+        )
+        .unwrap();
+        stream.write_all(b"\n").unwrap();
+        assert_eq!(
+            read_type(&mut reader, "error")["error"],
+            "profile_review_mismatch"
+        );
+
+        server.stop();
+        worker.stop().unwrap();
+    }
+
+    #[test]
     fn group_commands_return_confirmed_member_results() {
         let (server, worker, path) = group_server();
         let mut stream = UnixStream::connect(&path).unwrap();
@@ -868,6 +1024,7 @@ mod tests {
                 dashboard: None,
                 error: None,
                 group_result: None,
+                profile_result: None,
             })
         };
         assert!(client.queue(event(1)));
@@ -891,6 +1048,7 @@ mod tests {
                 dashboard: None,
                 error: None,
                 group_result: None,
+                profile_result: None,
             })
         };
         while client.queue(large_reply()) {}
@@ -991,11 +1149,31 @@ mod tests {
             dashboard: None,
             error: None,
             group_result: None,
+            profile_result: None,
         })));
         assert!(client.reject("malformed_message"));
         assert!(client.has_pending_output());
         assert!(flush_client(&mut client));
         assert!(!client.has_pending_output());
+    }
+
+    #[test]
+    fn profile_result_is_additive_v1_json() {
+        let response = profile_message(
+            "profile_list_result",
+            ProfileResult::Listed {
+                profiles: vec!["desk".into()],
+            },
+        );
+
+        assert_eq!(
+            serde_json::to_value(response).unwrap(),
+            serde_json::json!({
+                "v": 1,
+                "type": "profile_list_result",
+                "profile_result": {"status": "listed", "profiles": ["desk"]},
+            })
+        );
     }
 
     #[test]

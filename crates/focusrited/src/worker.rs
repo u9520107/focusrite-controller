@@ -10,8 +10,10 @@ use std::{
 };
 
 use crate::{
-    ControlId, Device, DeviceSnapshot, GroupError, GroupResult, Service, ServiceError, Value,
-    dashboard_store::DashboardConfig, profile_store::Profiles,
+    ControlId, Device, DeviceSnapshot, GroupError, GroupResult, ProfileApplyResult, ProfilePreview,
+    ProfileReview, Service, ServiceError, Value,
+    dashboard_store::DashboardConfig,
+    profile_store::{ProfileStore, Profiles},
 };
 
 const QUEUE_LIMIT: usize = 32;
@@ -31,6 +33,7 @@ pub struct State {
 pub enum WorkerError {
     Dashboard(String),
     Group(GroupError),
+    ProfileStore(String),
     UnknownGroup,
     Service(ServiceError),
     Stopped,
@@ -41,6 +44,7 @@ impl std::fmt::Display for WorkerError {
         match self {
             Self::Dashboard(error) => write!(formatter, "dashboard configuration: {error}"),
             Self::Group(error) => write!(formatter, "group command: {error:?}"),
+            Self::ProfileStore(error) => write!(formatter, "profile store: {error}"),
             Self::UnknownGroup => formatter.write_str("unknown dashboard group"),
             Self::Service(error) => write!(formatter, "service error: {error:?}"),
             Self::Stopped => formatter.write_str("device worker stopped"),
@@ -68,6 +72,20 @@ enum Request {
         position: u16,
         reply: std::sync::mpsc::Sender<Result<(State, GroupResult), WorkerError>>,
     },
+    ProfileSave {
+        name: String,
+        reply: std::sync::mpsc::Sender<Result<Vec<String>, WorkerError>>,
+    },
+    ProfileList(std::sync::mpsc::Sender<Result<Vec<String>, WorkerError>>),
+    ProfileReview {
+        name: String,
+        reply: std::sync::mpsc::Sender<Result<ProfilePreview, WorkerError>>,
+    },
+    ProfileApply {
+        name: String,
+        review: ProfileReview,
+        reply: std::sync::mpsc::Sender<Result<(State, ProfileApplyResult), WorkerError>>,
+    },
     Stop(std::sync::mpsc::Sender<()>),
 }
 
@@ -91,6 +109,16 @@ impl DeviceWorker {
         profiles: Profiles,
         dashboard: Option<DashboardConfig>,
     ) -> Result<Self, WorkerError> {
+        Self::start_with_dashboard_and_profile_store(device, profiles, dashboard, None)
+    }
+
+    /// Optional store keeps profile persistence on the serial service thread.
+    pub fn start_with_dashboard_and_profile_store<D: Device + Send + 'static>(
+        device: D,
+        profiles: Profiles,
+        dashboard: Option<DashboardConfig>,
+        profile_store: Option<ProfileStore>,
+    ) -> Result<Self, WorkerError> {
         let (sender, receiver) = sync_channel(QUEUE_LIMIT);
         let (ready_sender, ready_receiver) = sync_channel(1);
         let thread = thread::spawn(move || match Service::connect(device) {
@@ -103,7 +131,7 @@ impl DeviceWorker {
                     return;
                 }
                 let _ = ready_sender.send(Ok(()));
-                run(service, receiver, dashboard);
+                run(service, receiver, dashboard, profile_store);
             }
             Err(error) => {
                 let _ = ready_sender.send(Err(WorkerError::Service(error)));
@@ -173,6 +201,52 @@ impl DeviceWorker {
         receiver.recv().map_err(|_| WorkerError::Stopped)?
     }
 
+    pub fn save_profile(&self, name: String) -> Result<Vec<String>, WorkerError> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.sender
+            .send(Request::ProfileSave {
+                name,
+                reply: sender,
+            })
+            .map_err(|_| WorkerError::Stopped)?;
+        receiver.recv().map_err(|_| WorkerError::Stopped)?
+    }
+
+    pub fn profiles(&self) -> Result<Vec<String>, WorkerError> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.sender
+            .send(Request::ProfileList(sender))
+            .map_err(|_| WorkerError::Stopped)?;
+        receiver.recv().map_err(|_| WorkerError::Stopped)?
+    }
+
+    pub fn review_profile(&self, name: String) -> Result<ProfilePreview, WorkerError> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.sender
+            .send(Request::ProfileReview {
+                name,
+                reply: sender,
+            })
+            .map_err(|_| WorkerError::Stopped)?;
+        receiver.recv().map_err(|_| WorkerError::Stopped)?
+    }
+
+    pub fn apply_profile(
+        &self,
+        name: String,
+        review: ProfileReview,
+    ) -> Result<(State, ProfileApplyResult), WorkerError> {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.sender
+            .send(Request::ProfileApply {
+                name,
+                review,
+                reply: sender,
+            })
+            .map_err(|_| WorkerError::Stopped)?;
+        receiver.recv().map_err(|_| WorkerError::Stopped)?
+    }
+
     pub fn stop(&self) -> Result<(), WorkerError> {
         let (sender, receiver) = std::sync::mpsc::channel();
         self.sender
@@ -190,6 +264,7 @@ fn run<D: Device>(
     mut service: Service<D>,
     receiver: Receiver<Request>,
     dashboard: DashboardConfig,
+    profile_store: Option<ProfileStore>,
 ) {
     let mut last_health_check = Instant::now();
     loop {
@@ -201,7 +276,7 @@ fn run<D: Device>(
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
             };
             processed += 1;
-            if !handle_request(&mut service, &dashboard, request) {
+            if !handle_request(&mut service, &dashboard, profile_store.as_ref(), request) {
                 return;
             }
         }
@@ -226,6 +301,7 @@ fn run<D: Device>(
 fn handle_request<D: Device>(
     service: &mut Service<D>,
     dashboard: &DashboardConfig,
+    profile_store: Option<&ProfileStore>,
     request: Request,
 ) -> bool {
     match request {
@@ -269,6 +345,40 @@ fn handle_request<D: Device>(
                 .map(|result| (state(service, dashboard), result));
             let _ = reply.send(result);
         }
+        Request::ProfileSave { name, reply } => {
+            let before = service.profiles().clone();
+            let result = service
+                .save_profile(name)
+                .map_err(WorkerError::Service)
+                .and_then(|_| match profile_store {
+                    Some(store) => store
+                        .save_service(service)
+                        .map_err(|error| WorkerError::ProfileStore(error.to_string())),
+                    None => Ok(()),
+                })
+                .map(|_| service.profiles().keys().cloned().collect());
+            if result.is_err() {
+                service.set_profiles(before);
+            }
+            let _ = reply.send(result);
+        }
+        Request::ProfileList(reply) => {
+            let _ = reply.send(Ok(service.profiles().keys().cloned().collect()));
+        }
+        Request::ProfileReview { name, reply } => {
+            let _ = reply.send(service.review_profile(&name).map_err(WorkerError::Service));
+        }
+        Request::ProfileApply {
+            name,
+            review,
+            reply,
+        } => {
+            let result = service
+                .apply_reviewed_profile(&name, &review)
+                .map(|result| (state(service, dashboard), result))
+                .map_err(WorkerError::Service);
+            let _ = reply.send(result);
+        }
         Request::Stop(reply) => {
             let _ = reply.send(());
             return false;
@@ -299,7 +409,8 @@ mod tests {
     use super::*;
     use crate::{
         ControlCapability, DeviceError, GroupCapability, GroupOperation, ValueDomain,
-        dashboard_store::DashboardLevelGroup, profile_store::Profiles,
+        dashboard_store::DashboardLevelGroup,
+        profile_store::{ProfileStore, Profiles},
     };
 
     struct MockDevice(DeviceSnapshot);
@@ -414,6 +525,54 @@ mod tests {
         assert_eq!(state.snapshot.values[&volume], Value::Integer(75));
         assert_eq!(state.revision, 2);
         worker.stop().unwrap();
+    }
+
+    #[test]
+    fn profile_save_persists_then_requires_review_before_apply() {
+        let directory = std::env::temp_dir().join(format!(
+            "focusrited-worker-profile-test-{}",
+            std::process::id()
+        ));
+        let path = directory.join("profiles");
+        let volume = ControlId("output.volume".into());
+        let worker = DeviceWorker::start_with_dashboard_and_profile_store(
+            MockDevice(DeviceSnapshot {
+                device_id: "mock-device".into(),
+                capability_schema: "mock-v1".into(),
+                capabilities: vec![ControlCapability {
+                    id: volume.clone(),
+                    domain: ValueDomain::Integer,
+                    writable: true,
+                    available: true,
+                    minimum: Some(0),
+                    maximum: Some(100),
+                    group: None,
+                    presentation: None,
+                }],
+                values: BTreeMap::from([(volume.clone(), Value::Integer(50))]),
+            }),
+            Profiles::new(),
+            None,
+            Some(ProfileStore::new(&path)),
+        )
+        .unwrap();
+
+        assert_eq!(worker.save_profile("desk".into()).unwrap(), vec!["desk"]);
+        worker.command(volume.clone(), Value::Integer(75)).unwrap();
+        let preview = worker.review_profile("desk".into()).unwrap();
+        let review = preview.review.unwrap();
+        let (state, result) = worker.apply_profile("desk".into(), review).unwrap();
+
+        assert_eq!(state.snapshot.values[&volume], Value::Integer(50));
+        assert_eq!(result.entries[0].status, crate::ProfileApplyStatus::Applied);
+        worker.stop().unwrap();
+        assert!(
+            ProfileStore::new(&path)
+                .load()
+                .unwrap()
+                .contains_key("desk")
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
