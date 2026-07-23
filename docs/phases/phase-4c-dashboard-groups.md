@@ -6,8 +6,17 @@ In progress. MR 1 delivers versioned, device-bound dashboard metadata and
 read-only CLI import/export. MR 2a/2b deliver persisted mock-only relative
 groups through service, worker, local IPC, and touchscreen. Remaining MR 2
 slices add adaptive adapter declarations, native/device-specific operations,
-mirrors, and synchronized sets. This phase does not add meters, LAN serving,
-browser UI, or unapproved hardware routing changes.
+and synchronized sets. MR 2e persists validated disabled-by-default mirrors;
+confirmed source commands and source events map through serial worker, confirm
+their targets, and return per-target applied/skipped/failed results. This phase
+does not add meters, LAN serving, browser UI, or unapproved hardware routing
+changes.
+
+**Deferred test follow-up:** rebase integration retains `ProfileStore` save,
+review, and apply behavior, but displaced the worker-level persistence test
+that proves a configured store survives the full save/review/apply path. Restore
+that mock test before further profile or worker refactoring; mirror coverage is
+not a substitute.
 
 ## Goal
 
@@ -38,10 +47,11 @@ configuration through validated CLI import/export before Phase 5 web editing.
 - Native hardware group/link support wins. Non-native group writes are
   validated, ordered compound commands: no atomicity claim, per-member
   confirmation and applied/skipped/failed report required.
-- A mirror binding is separate from a virtual group: a confirmed source-level
-  change writes mapped target level automatically. One-way mirrors are explicit,
-  off by default, capability-declared, and reject cycles. They may cross
-  input/output only where adapter declares compatible safe mapping.
+- A mirror binding is separate from a virtual group: one confirmed source-level
+  change writes its mapped targets directly. One-way mirrors are explicit,
+  off by default, capability-declared fan-out bindings; targets cannot become
+  mirror sources. They may cross input/output only where adapter declares
+  compatible safe mapping.
 - A synchronized level set is separate explicit binding type, not a collection
   of mirrors. Any confirmed member change drives mapped every other member
   through serial worker. It supports physical main-monitor knob to optical
@@ -233,12 +243,17 @@ configuration through validated CLI import/export before Phase 5 web editing.
 
 ### MR 2e: One-way mirror bindings
 
-**Plan**
+**Complete — mock-only runtime semantics**
 
-1. Persist validated source/target mapping with explicit disabled-by-default
-   state and adapter-declared operation compatibility.
-2. Reject cycles; route writes through serial worker; confirm target state.
-3. Report target partial failure without rolling back confirmed source state.
+- Dashboard schema v3 persists source, target, and disabled-by-default state.
+  It accepts only adapter-declared relative-level controls, rejects self maps,
+  repeated sources, and all cycles.
+- Confirmed source commands and external source events flow through serial
+  worker. Each target mapping uses normalized integer bounds, confirms state,
+  and returns applied/skipped/failed result without rolling back source.
+- Target writes refresh authoritative state before later event reconciliation,
+  so expected target echoes do not re-trigger a mapping. Touchscreen shows a
+  target-failure toast.
 
 **Verification**
 

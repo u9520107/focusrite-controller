@@ -109,14 +109,14 @@ fn run(listener: UnixListener, worker: Arc<DeviceWorker>, running: Arc<AtomicBoo
     let mut last_revision = None;
     while running.load(Ordering::SeqCst) {
         accept_clients(&listener, &worker, &instance_id, &mut clients);
-        if let Ok(state) = worker.state()
+        if let Ok(state) = worker.event_state()
             && last_revision
                 .replace(state.revision)
                 .is_some_and(|revision| revision != state.revision)
         {
             broadcast(
                 &mut clients,
-                Outbound::Event(state_message(&instance_id, "event", state)),
+                Outbound::Event(operation_state_message(&instance_id, "event", state)),
             );
         }
         clients.retain_mut(|client| {
@@ -235,7 +235,7 @@ fn handle_request(
         },
         "command" => match (request.control, request.value) {
             (Some(control), Some(value)) => match worker.command(ControlId(control), value) {
-                Ok(state) => state_message(instance_id, "command_result", state),
+                Ok(state) => operation_state_message(instance_id, "command_result", state),
                 Err(error) => error_message(service_error(error)),
             },
             _ => error_message("invalid_command"),
@@ -455,6 +455,8 @@ struct Response {
     group_result: Option<GroupCommandResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     profile_result: Option<ProfileResult>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mirror_results: Option<Vec<MirrorCommandResult>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -481,6 +483,16 @@ struct GroupFailure {
     error: &'static str,
 }
 
+#[derive(Clone, Serialize)]
+struct MirrorCommandResult {
+    source: ControlId,
+    target: ControlId,
+    applied: bool,
+    skipped: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failed: Option<GroupFailure>,
+}
+
 fn state_message(instance_id: &str, kind: &'static str, state: crate::worker::State) -> Response {
     Response {
         v: PROTOCOL_VERSION,
@@ -493,7 +505,38 @@ fn state_message(instance_id: &str, kind: &'static str, state: crate::worker::St
         error: None,
         group_result: None,
         profile_result: None,
+        mirror_results: None,
     }
+}
+
+fn operation_state_message(
+    instance_id: &str,
+    kind: &'static str,
+    state: crate::worker::State,
+) -> Response {
+    let mirror_results = (!state.mirror_results.is_empty()).then(|| {
+        state
+            .mirror_results
+            .iter()
+            .cloned()
+            .map(|result| {
+                let target = result.target;
+                MirrorCommandResult {
+                    source: result.source,
+                    target: target.clone(),
+                    applied: result.applied,
+                    skipped: result.skipped,
+                    failed: result.failed.map(|error| GroupFailure {
+                        control: target,
+                        error: group_service_error(error),
+                    }),
+                }
+            })
+            .collect()
+    });
+    let mut response = state_message(instance_id, kind, state);
+    response.mirror_results = mirror_results;
+    response
 }
 
 fn error_message(error: &'static str) -> Response {
@@ -508,6 +551,7 @@ fn error_message(error: &'static str) -> Response {
         error: Some(error),
         group_result: None,
         profile_result: None,
+        mirror_results: None,
     }
 }
 
@@ -523,6 +567,7 @@ fn profile_message(kind: &'static str, profile_result: ProfileResult) -> Respons
         error: None,
         group_result: None,
         profile_result: Some(profile_result),
+        mirror_results: None,
     }
 }
 
@@ -532,7 +577,7 @@ fn profile_state_message(
     state: crate::worker::State,
     profile_result: ProfileResult,
 ) -> Response {
-    let mut response = state_message(instance_id, kind, state);
+    let mut response = operation_state_message(instance_id, kind, state);
     response.profile_result = Some(profile_result);
     response
 }
@@ -543,7 +588,7 @@ fn group_state_message(
     group: String,
     result: GroupResult,
 ) -> Response {
-    let mut response = state_message(instance_id, "group_command_result", state);
+    let mut response = operation_state_message(instance_id, "group_command_result", state);
     response.group_result = Some(GroupCommandResult {
         group,
         applied: result.applied,
@@ -786,6 +831,7 @@ mod tests {
                         members: vec![first.clone(), second],
                         anchor: first,
                     }],
+                    mirrors: Vec::new(),
                 }),
             )
             .unwrap(),
@@ -1025,6 +1071,7 @@ mod tests {
                 error: None,
                 group_result: None,
                 profile_result: None,
+                mirror_results: None,
             })
         };
         assert!(client.queue(event(1)));
@@ -1049,6 +1096,7 @@ mod tests {
                 error: None,
                 group_result: None,
                 profile_result: None,
+                mirror_results: None,
             })
         };
         while client.queue(large_reply()) {}
@@ -1150,6 +1198,7 @@ mod tests {
             error: None,
             group_result: None,
             profile_result: None,
+            mirror_results: None,
         })));
         assert!(client.reject("malformed_message"));
         assert!(client.has_pending_output());
