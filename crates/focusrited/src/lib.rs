@@ -13,7 +13,7 @@ pub mod worker;
 
 use std::{collections::BTreeMap, thread, time::Duration};
 
-use groups::{GroupError, GroupResult, LevelGroup, map_level, unmap_level};
+use groups::{GroupError, GroupResult, LevelGroup, MirrorResult, map_level, unmap_level};
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
 #[serde(transparent)]
@@ -375,6 +375,79 @@ impl<D: Device> Service<D> {
             result.applied.push(member.clone());
         }
         Ok(result)
+    }
+
+    /// One-way mapped level write. Source must already be confirmed state.
+    pub fn command_mirror(
+        &mut self,
+        source: &ControlId,
+        target: &ControlId,
+    ) -> Result<MirrorResult, GroupError> {
+        groups::validate_relative_level(source, &self.snapshot.capabilities)?;
+        groups::validate_relative_level(target, &self.snapshot.capabilities)?;
+        let source_capability = self
+            .snapshot
+            .capabilities
+            .iter()
+            .find(|capability| capability.id == *source)
+            .ok_or_else(|| GroupError::IneligibleMember(source.clone()))?;
+        let target_capability = self
+            .snapshot
+            .capabilities
+            .iter()
+            .find(|capability| capability.id == *target)
+            .ok_or_else(|| GroupError::IneligibleMember(target.clone()))?;
+        let Value::Integer(source_value) = self
+            .snapshot
+            .values
+            .get(source)
+            .ok_or_else(|| GroupError::UnmappableCurrentState(source.clone()))?
+        else {
+            return Err(GroupError::UnmappableCurrentState(source.clone()));
+        };
+        let source_position = unmap_level(
+            *source_value,
+            source_capability
+                .minimum
+                .ok_or_else(|| GroupError::IneligibleMember(source.clone()))?,
+            source_capability
+                .maximum
+                .ok_or_else(|| GroupError::IneligibleMember(source.clone()))?,
+        )?;
+        let target_value = map_level(
+            source_position,
+            target_capability
+                .minimum
+                .ok_or_else(|| GroupError::IneligibleMember(target.clone()))?,
+            target_capability
+                .maximum
+                .ok_or_else(|| GroupError::IneligibleMember(target.clone()))?,
+        )?;
+        if self.snapshot.values.get(target) == Some(&Value::Integer(target_value)) {
+            return Ok(MirrorResult {
+                source: source.clone(),
+                target: target.clone(),
+                applied: false,
+                skipped: true,
+                failed: None,
+            });
+        }
+        match self.command(target, Value::Integer(target_value)) {
+            Ok(()) => Ok(MirrorResult {
+                source: source.clone(),
+                target: target.clone(),
+                applied: true,
+                skipped: false,
+                failed: None,
+            }),
+            Err(error) => Ok(MirrorResult {
+                source: source.clone(),
+                target: target.clone(),
+                applied: false,
+                skipped: false,
+                failed: Some(error),
+            }),
+        }
     }
 
     /// Reconcile ALSA/front-panel changes with authoritative hardware state.

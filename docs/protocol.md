@@ -44,8 +44,11 @@ carries authoritative state after its ordered attempt. A review includes
 binding state, sorted control entries, and an opaque revision/fingerprint pair.
 Apply rejects a missing, stale, or mismatched review before any write. Group
 commands are limited to persisted, adapter-declared `relative_level` groups
-and remain non-atomic ordered writes. Dangerous-control confirmation and
-idempotency keys remain deferred to Phase 5.
+and remain non-atomic ordered writes. A command or event which performs
+configured mirror fan-out includes additive `mirror_results` for each target;
+clients treat that compound revision as one authoritative operation. Ordinary
+snapshots never replay prior mirror outcomes. Dangerous-control confirmation
+and idempotency keys remain deferred to Phase 5.
 
 ## State rules
 

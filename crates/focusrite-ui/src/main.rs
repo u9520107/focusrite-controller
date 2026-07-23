@@ -143,6 +143,7 @@ struct Response {
     error: Option<String>,
     group_result: Option<GroupCommandResult>,
     profile_result: Option<ProfileResult>,
+    mirror_results: Option<Vec<MirrorCommandResult>>,
 }
 
 #[derive(Deserialize)]
@@ -155,6 +156,13 @@ struct GroupCommandResult {
 struct GroupFailure {
     control: ControlId,
     error: String,
+}
+
+#[derive(Deserialize)]
+struct MirrorCommandResult {
+    source: ControlId,
+    target: ControlId,
+    failed: Option<GroupFailure>,
 }
 
 #[derive(Deserialize)]
@@ -434,6 +442,20 @@ impl TouchscreenApp {
             })
         });
         let group_result = response.kind == "group_command_result";
+        let mirror_result = response
+            .mirror_results
+            .as_ref()
+            .is_some_and(|results| !results.is_empty());
+        let mirror_failure = response.mirror_results.as_ref().and_then(|results| {
+            results.iter().find_map(|result| {
+                result.failed.as_ref().map(|failure| {
+                    format!(
+                        "{} to {} failed ({})",
+                        result.source.0, result.target.0, failure.error
+                    )
+                })
+            })
+        });
         let (Some(instance_id), Some(revision), Some(online), Some(snapshot), Some(dashboard)) = (
             response.instance_id,
             response.revision,
@@ -453,9 +475,13 @@ impl TouchscreenApp {
         ) {
             return;
         }
+        let new_revision = self
+            .state
+            .as_ref()
+            .is_none_or(|state| state.instance_id != instance_id || state.revision != revision);
         let resync = self.state.as_ref().is_some_and(|state| {
             state.instance_id != instance_id
-                || (!group_result && revision > state.revision.saturating_add(1))
+                || (!(group_result || mirror_result) && revision > state.revision.saturating_add(1))
         });
         if resync {
             self.state = None;
@@ -474,6 +500,8 @@ impl TouchscreenApp {
         });
         self.connection = Connection::Connected;
         if let Some(message) = group_failure {
+            self.toast = Some((message, Instant::now()));
+        } else if new_revision && let Some(message) = mirror_failure {
             self.toast = Some((message, Instant::now()));
         }
     }
@@ -1734,6 +1762,7 @@ mod tests {
                     entries: Vec::new(),
                 },
             }),
+            mirror_results: None,
         });
         assert_eq!(
             app.profile_review
@@ -1762,6 +1791,7 @@ mod tests {
                     entries: Vec::new(),
                 },
             }),
+            mirror_results: None,
         });
         assert!(app.profile_review.is_none());
     }
@@ -1782,6 +1812,7 @@ mod tests {
             error: None,
             group_result: None,
             profile_result: None,
+            mirror_results: None,
         });
         app.apply(Response {
             version: 1,
@@ -1800,6 +1831,7 @@ mod tests {
                 }),
             }),
             profile_result: None,
+            mirror_results: None,
         });
         assert_eq!(
             app.toast.as_ref().map(|(message, _)| message.as_str()),
