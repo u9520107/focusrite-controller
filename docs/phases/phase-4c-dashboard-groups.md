@@ -41,10 +41,11 @@ configuration through validated CLI import/export before Phase 5 web editing.
 - Native hardware group/link support wins. Non-native group writes are
   validated, ordered compound commands: no atomicity claim, per-member
   confirmation and applied/skipped/failed report required.
-- A mirror binding is separate from a virtual group: a confirmed source-level
-  change writes mapped target level automatically. One-way mirrors are explicit,
-  off by default, capability-declared, and reject cycles. They may cross
-  input/output only where adapter declares compatible safe mapping.
+- A mirror binding is separate from a virtual group: one confirmed source-level
+  change writes its mapped targets directly. One-way mirrors are explicit,
+  off by default, capability-declared fan-out bindings; targets cannot become
+  mirror sources. They may cross input/output only where adapter declares
+  compatible safe mapping.
 - A synchronized level set is separate explicit binding type, not a collection
   of mirrors. Any confirmed member change drives mapped every other member
   through serial worker. It supports physical main-monitor knob to optical

@@ -1,7 +1,7 @@
 //! Versioned, per-device dashboard metadata. Never contains device state.
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs::{self, File},
     io::{self, Write},
     path::PathBuf,
@@ -150,17 +150,16 @@ impl DashboardConfig {
 }
 
 fn validate_mirrors(mirrors: &[DashboardMirror], snapshot: &DeviceSnapshot) -> io::Result<()> {
-    let mut targets = BTreeMap::new();
+    let mut sources = BTreeSet::new();
+    let mut targets = BTreeSet::new();
     for mirror in mirrors {
         if mirror.source == mirror.target {
             return invalid("dashboard mirror maps a control to itself");
         }
-        if targets
-            .insert(mirror.source.clone(), mirror.target.clone())
-            .is_some()
-        {
-            return invalid("dashboard repeats mirror source");
+        if !targets.insert(mirror.target.clone()) {
+            return invalid("dashboard repeats mirror target");
         }
+        sources.insert(mirror.source.clone());
         validate_relative_level(&mirror.source, &snapshot.capabilities).map_err(|error| {
             invalid_error(format!("dashboard mirror source is invalid: {error:?}"))
         })?;
@@ -168,15 +167,8 @@ fn validate_mirrors(mirrors: &[DashboardMirror], snapshot: &DeviceSnapshot) -> i
             invalid_error(format!("dashboard mirror target is invalid: {error:?}"))
         })?;
     }
-    for source in targets.keys() {
-        let mut seen = BTreeSet::new();
-        let mut current = source;
-        while let Some(next) = targets.get(current) {
-            if !seen.insert(current) {
-                return invalid("dashboard mirror cycle");
-            }
-            current = next;
-        }
+    if sources.intersection(&targets).next().is_some() {
+        return invalid("dashboard mirror target cannot be a source");
     }
     Ok(())
 }
@@ -380,21 +372,24 @@ mod tests {
     }
 
     #[test]
-    fn mirrors_require_eligible_non_cyclic_controls() {
+    fn mirrors_allow_fanout_but_reject_chains() {
         let mut snapshot = snapshot();
         let other = ControlId("other".into());
-        snapshot.capabilities.push(ControlCapability {
-            id: other.clone(),
-            domain: ValueDomain::Integer,
-            writable: true,
-            available: true,
-            minimum: Some(0),
-            maximum: Some(100),
-            group: Some(crate::GroupCapability {
-                operation: crate::GroupOperation::RelativeLevel,
-            }),
-            presentation: None,
-        });
+        let third = ControlId("third".into());
+        for id in [&other, &third] {
+            snapshot.capabilities.push(ControlCapability {
+                id: id.clone(),
+                domain: ValueDomain::Integer,
+                writable: true,
+                available: true,
+                minimum: Some(0),
+                maximum: Some(100),
+                group: Some(crate::GroupCapability {
+                    operation: crate::GroupOperation::RelativeLevel,
+                }),
+                presentation: None,
+            });
+        }
         let shown = ControlId("shown".into());
         let mut config = DashboardConfig::defaults(&snapshot);
         config.mirrors = vec![DashboardMirror {
@@ -402,6 +397,12 @@ mod tests {
             target: other.clone(),
             enabled: false,
         }];
+        config.validate_for(&snapshot).unwrap();
+        config.mirrors.push(DashboardMirror {
+            source: shown.clone(),
+            target: third,
+            enabled: false,
+        });
         config.validate_for(&snapshot).unwrap();
         config.mirrors.push(DashboardMirror {
             source: other,

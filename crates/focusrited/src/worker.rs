@@ -241,6 +241,7 @@ fn run<D: Device>(
             .unwrap_or_default();
             mirror_results = pass.results;
             pending_mirror_sources = pass.pending_sources;
+            thread::sleep(EVENT_WAIT);
             continue;
         }
 
